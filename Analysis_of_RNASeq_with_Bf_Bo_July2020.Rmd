@@ -1,0 +1,3155 @@
+---
+title: "Analysis of RNA-Seq with *B. fragilis* and *B. ovatus* - Take 2"
+author: "Paige Salerno"
+date: "7/14/2020"
+output: 
+  html_document: 
+    fig_width: 10
+    fig_height: 7
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(root.dir = "/Users/paigesalerno/Documents/Rotations/Ross_Lab/RNA-Seq_Analysis_of_Bfragilis_and_Bovatus/Analysis_RStudio_Project/RNA-Seq_Analysis_Bfrag_Bova/")
+```
+
+## Experimental Design/Background:
+The purpose of this experiment was to see how the gene expression profiles of *B. fragilis* and *B. ovatus* change not only to treatments of antibiotic, but also when cultured together in varying ratios. The sample treatment conditions are the following:
+
+**Sample 1**: *B. fragilis* 9343 normal growth conditions (OD 3.0)
+
+**Sample 2**: *B. fragilis* 9343, growth on 1ug/mL tetracycline (OD 3.0)
+
+**Sample 3**: *B. ovatus* 3725 normal growth conditions (OD 3.0)
+
+**Sample 4**: *B. ovatus* 3725, growth on 1ug/mL tetracycline (OD 3.0)
+
+**Sample 5**: *B. ovatus* 3725 co-culture with *B. fragilis* 9343 (1:10) (OD 0.6 mixed with OD 6.0)
+
+**Sample 6**: *B. fragilis* 9343 co-culture with *B. ovatus* 3725 (1:10) (OD 0.6 mixed with OD 6.0)
+
+**NOTE:** While each sample had biological triplicates, the fastqs we were given did not include those for samples 3-1, 3-2, or 6-3.
+
+I started with a set of fastq files as well as a Genewiz output file that could be used as a comparison for results that I generate. 
+
+Genewiz output file: `../RNA-Seq_Analysis_Bfrag_Bova/GENEWIZ_RNA-Seq_Analysis_Report.pdf`
+
+## Processing of *B. fragilis* and *B. ovatus* alone (Samples 1-4)
+### Step 1: Trimming
+**NOTE:** For the steps prior to DESeq2, we used bash.
+
+**NOTE:** After running MultiQC post-alignment, I realized it looked like samples 5-2, 5-3, 6-1 and 6-2 were mislabeled so I relabeled them as follows:
+
+- 5-2 --> 6-1
+- 5-3 --> 6-2
+- 6-1 --> 5-2
+- 6-2 --> 5-3
+
+To trim the reads, we used [**fastp**](https://github.com/OpenGene/fastp) and ran it on all of the samples:
+```{bash, eval=F}
+fastp -i 1-1_R1_001.fastq.gz -I 1-1_R2_001.fastq.gz -o 1-1_fastp_fastq.gz -O 1-1_R2_fastp_fastq.gz
+fastp -i 1-2_R1_001.fastq.gz -I 1-2_R2_001.fastq.gz -o 1-2_R1_fastp_fastq.gz -O 1-2_R2_fastp_fastq.gz
+fastp -i 1-3_R1_001.fastq.gz -I 1-3_R2_001.fastq.gz -o 1-3_R1_fastp_fastq.gz -O 1-3_R2_fastp_fastq.gz
+fastp -i 2-1_R1_001.fastq.gz -I 2-1_R2_001.fastq.gz -o 2-1_R1_fastp_fastq.gz -O 2-1_R2_fastp_fastq.gz
+fastp -i 2-2_R1_001.fastq.gz -I 2-2_R2_001.fastq.gz -o 2-2_R1_fastp_fastq.gz -O 2-2_R2_fastp_fastq.gz
+fastp -i 2-3_R1_001.fastq.gz -I 2-3_R2_001.fastq.gz -o 2-3_R1_fastp_fastq.gz -O 2-3_R2_fastp_fastq.gz
+fastp -i 3-3_R1_001.fastq.gz -I 3-3_R2_001.fastq.gz -o 3-3_R1_fastp_fastq.gz -O 3-3_R2_fastp_fastq.gz
+fastp -i 4-1_R1_001.fastq.gz -I 4-1_R2_001.fastq.gz -o 4-1_R1_fastp_fastq.gz -O 4-1_R2_fastp_fastq.gz
+fastp -i 4-2_R1_001.fastq.gz -I 4-2_R2_001.fastq.gz -o 4-2_R1_fastp_fastq.gz -O 4-2_R2_fastp_fastq.gz
+fastp -i 4-3_R1_001.fastq.gz -I 4-3_R2_001.fastq.gz -o 4-3_R1_fastp_fastq.gz -O 4-3_R2_fastp_fastq.gz
+```
+
+### Step 2: Alignment
+For this step we used the [**STAR**](https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf) aligner. This is a splice-aware aligner, that is not required for bacterial samples, however the software we want to use to count reads later on requires output from **STAR** so we'll just see how it goes. I will probably try to compare **salmon** to **STAR** in the near future. 
+
+First we have to generate an index file using the fasta and GTF file from NCBI
+For *B. fragilis*: `GCA_000025985.1_ASM2598v1_genomic.fna`, `GCA_000025985.1_ASM2598v1_genomic.gtf`
+For *B. ovatus*: `GCA_007012325.1_ASM701232v1_genomic.fna`, `GCA_007012325.1_ASM701232v1_genomic.gtf`
+
+```{bash, eval=F}
+# For B. fragilis
+STAR --runThreadN 16 \
+  --runMode genomeGenerate \
+  --genomeDir index/bfrag_ASM2598v1_index \
+  --genomeFastaFiles GCA_000025985.1_ASM2598v1_genomic.fna \
+  --sjdbGTFfile GCA_000025985.1_ASM2598v1_genomic.gtf \
+  --genomeSAindexNbases 11
+
+# For B. ovatus
+STAR --runThreadN 16 \
+  --runMode genomeGenerate \
+  --genomeDir index/bova_ASM701232v1_index \
+  --genomeFastaFiles GCA_007012325.1_ASM701232v1_genomic.fna \
+  --sjdbGTFfile GCA_007012325.1_ASM701232v1_genomic.gtf \
+  --genomeSAindexNbases 11
+```
+
+Next we can align the reads. I did this using the following structure for each sample, and plan on figuring out how to write a loop for this soon:
+```{bash, eval=F}
+# For B. fragilis
+STAR --genomeDir ../Ref/index/bfrag_ASM2598v1_index \
+  --readFilesIn ../../fastq/1-1_R1_fastp_fastq.gz  ../../fastq/1-1_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_000025985.1_ASM2598v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bfrag_1-1.
+
+STAR --genomeDir ../Ref/index/bfrag_ASM2598v1_index \
+  --readFilesIn ../../fastq/1-2_R1_fastp_fastq.gz  ../../fastq/1-2_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_000025985.1_ASM2598v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bfrag_1-2.
+
+STAR --genomeDir ../Ref/index/bfrag_ASM2598v1_index \
+  --readFilesIn ../../fastq/1-3_R1_fastp_fastq.gz  ../../fastq/1-3_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_000025985.1_ASM2598v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bfrag_1-3.
+
+STAR --genomeDir ../Ref/index/bfrag_ASM2598v1_index \
+  --readFilesIn ../../fastq/2-1_R1_fastp_fastq.gz  ../../fastq/2-1_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_000025985.1_ASM2598v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bfrag_2-1.
+
+STAR --genomeDir ../Ref/index/bfrag_ASM2598v1_index \
+  --readFilesIn ../../fastq/2-2_R1_fastp_fastq.gz  ../../fastq/2-2_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_000025985.1_ASM2598v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bfrag_2-2.
+
+STAR --genomeDir ../Ref/index/bfrag_ASM2598v1_index \
+  --readFilesIn ../../fastq/2-3_R1_fastp_fastq.gz  ../../fastq/2-3_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_000025985.1_ASM2598v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bfrag_2-3.
+
+# For B. ovatus
+STAR --genomeDir ../Ref/index/bova_ASM701232v1_index \
+  --readFilesIn ../../fastq/3-3_R1_fastp_fastq.gz  ../../fastq/3-3_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_007012325.1_ASM701232v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bova_3-3.
+
+STAR --genomeDir ../Ref/index/bova_ASM701232v1_index \
+  --readFilesIn ../../fastq/4-1_R1_fastp_fastq.gz  ../../fastq/4-1_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_007012325.1_ASM701232v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bova_4-1.
+
+STAR --genomeDir ../Ref/index/bova_ASM701232v1_index \
+  --readFilesIn ../../fastq/4-2_R1_fastp_fastq.gz  ../../fastq/4-2_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_007012325.1_ASM701232v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bova_4-2.
+
+STAR --genomeDir ../Ref/index/bova_ASM701232v1_index \
+  --readFilesIn ../../fastq/4-3_R1_fastp_fastq.gz  ../../fastq/4-3_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_007012325.1_ASM701232v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bova_4-3.
+```
+
+Next move all the files to their respective directories:
+```{bash, eval=F}
+mv bfrag_1-1* bfrag_1-1
+mv bfrag_1-2* bfrag_1-2
+mv bfrag_1-3* bfrag_1-3
+mv bfrag_2-1* bfrag_2-1
+mv bfrag_2-2* bfrag_2-2
+mv bfrag_2-3* bfrag_2-3
+
+mv bova_3-3* bova_3-3
+mv bova_4-1* bova_4-1
+mv bova_4-2* bova_4-2
+mv bova_4-3* bova_4-3
+```
+
+Then I used [**Samtools**](http://www.htslib.org/doc/samtools.html) to have a look at the header for our SAM file
+```{bash, eval=F} 
+samtools view -H bfrag_1-1/bfrag_1-1.Aligned.out.sam  | head
+```
+
+I also wanted to look at the first few alignment records in our BAM file
+```{bash, eval=F} 
+samtools view bfrag_1-1/bfrag_1-1.Aligned.out.sam | head
+```
+
+It is common to sort SAM/BAM files as this is required by many downstream tools that take alignment files as input. There is a way to include these steps this using STAR but I haven't tested it out yet. I added all of the following samtools commands to a script in a directory called `scripts/` 
+```{bash, eval=F}
+#!/bin/bash
+#PBS -l nodes=1:ppn=8
+#PBS -l walltime=24:00:00
+
+echo Sorting sam files
+# B. fragilis
+samtools sort bfrag_1-1/bfrag_1-1.Aligned.out.sam -o bfrag_1-1/bfrag_1-1.Aligned.out.sorted.sam
+samtools sort bfrag_1-2/bfrag_1-2.Aligned.out.sam -o bfrag_1-2/bfrag_1-2.Aligned.out.sorted.sam
+samtools sort bfrag_1-3/bfrag_1-3.Aligned.out.sam -o bfrag_1-3/bfrag_1-3.Aligned.out.sorted.sam
+samtools sort bfrag_2-1/bfrag_2-1.Aligned.out.sam -o bfrag_2-1/bfrag_2-1.Aligned.out.sorted.sam
+samtools sort bfrag_2-2/bfrag_2-2.Aligned.out.sam -o bfrag_2-2/bfrag_2-2.Aligned.out.sorted.sam
+samtools sort bfrag_2-3/bfrag_2-3.Aligned.out.sam -o bfrag_2-3/bfrag_2-3.Aligned.out.sorted.sam
+
+# B. Ovatus
+samtools sort bova_3-3/bova_3-3.Aligned.out.sam -o bova_3-3/bova_3-3.Aligned.out.sorted.sam
+samtools sort bova_4-1/bova_4-1.Aligned.out.sam -o bova_4-1/bova_4-1.Aligned.out.sorted.sam
+samtools sort bova_4-2/bova_4-2.Aligned.out.sam -o bova_4-2/bova_4-2.Aligned.out.sorted.sam
+samtools sort bova_4-3/bova_4-3.Aligned.out.sam -o bova_4-3/bova_4-3.Aligned.out.sorted.sam
+``` 
+
+Now that we've looked at the alignments, we should convert our SAM to BAM for indexing and downstream analysis. 
+```{bash, eval=F}
+echo Creating bam files
+# B. fragilis
+samtools view -S -b bfrag_1-1/bfrag_1-1.Aligned.out.sorted.sam > bfrag_1-1/bfrag_1-1.Aligned.out.sorted.bam
+samtools view -S -b bfrag_1-2/bfrag_1-2.Aligned.out.sorted.sam > bfrag_1-2/bfrag_1-2.Aligned.out.sorted.bam
+samtools view -S -b bfrag_1-3/bfrag_1-3.Aligned.out.sorted.sam > bfrag_1-3/bfrag_1-3.Aligned.out.sorted.bam
+samtools view -S -b bfrag_2-1/bfrag_2-1.Aligned.out.sorted.sam > bfrag_2-1/bfrag_2-1.Aligned.out.sorted.bam
+samtools view -S -b bfrag_2-2/bfrag_2-2.Aligned.out.sorted.sam > bfrag_2-2/bfrag_2-2.Aligned.out.sorted.bam
+samtools view -S -b bfrag_2-3/bfrag_2-3.Aligned.out.sorted.sam > bfrag_2-3/bfrag_2-3.Aligned.out.sorted.bam
+
+# B. ovatus
+samtools view -S -b bova_3-3/bova_3-3.Aligned.out.sorted.sam > bova_3-3/bova_3-3.Aligned.out.sorted.bam
+samtools view -S -b bova_4-1/bova_4-1.Aligned.out.sorted.sam > bova_4-1/bova_4-1.Aligned.out.sorted.bam
+samtools view -S -b bova_4-2/bova_4-2.Aligned.out.sorted.sam > bova_4-2/bova_4-2.Aligned.out.sorted.bam
+samtools view -S -b bova_4-3/bova_4-3.Aligned.out.sorted.sam > bova_4-3/bova_4-3.Aligned.out.sorted.bam
+``` 
+
+I also indexed this BAM, which created a file with the same name, but the suffix `.bai`. 
+```{bash, eval=F}
+echo Indexing bam files
+# B. fragilis
+samtools index bfrag_1-1/bfrag_1-1.Aligned.out.sorted.bam
+samtools index bfrag_1-2/bfrag_1-2.Aligned.out.sorted.bam
+samtools index bfrag_1-3/bfrag_1-3.Aligned.out.sorted.bam
+samtools index bfrag_2-1/bfrag_2-1.Aligned.out.sorted.bam
+samtools index bfrag_2-2/bfrag_2-2.Aligned.out.sorted.bam
+samtools index bfrag_2-3/bfrag_2-3.Aligned.out.sorted.bam
+
+# B. ovatus
+samtools index bova_3-3/bova_3-3.Aligned.out.sorted.bam
+samtools index bova_4-1/bova_4-1.Aligned.out.sorted.bam
+samtools index bova_4-2/bova_4-2.Aligned.out.sorted.bam
+samtools index bova_4-3/bova_4-3.Aligned.out.sorted.bam
+``` 
+
+I also wanted to count how many alignments have specific FLAG types (unique alignments, secondary, unmapped, properly paired). 
+```{bash, eval=F}
+echo Counting flags
+# B. fragilis
+samtools flagstat bfrag_1-1/bfrag_1-1.Aligned.out.sorted.bam
+samtools flagstat bfrag_1-2/bfrag_1-2.Aligned.out.sorted.bam
+samtools flagstat bfrag_1-3/bfrag_1-3.Aligned.out.sorted.bam
+samtools flagstat bfrag_2-1/bfrag_2-1.Aligned.out.sorted.bam
+samtools flagstat bfrag_2-2/bfrag_2-2.Aligned.out.sorted.bam
+samtools flagstat bfrag_2-3/bfrag_2-3.Aligned.out.sorted.bam
+
+# B. ovatus
+samtools flagstat bova_3-3/bova_3-3.Aligned.out.sorted.bam
+samtools flagstat bova_4-1/bova_4-1.Aligned.out.sorted.bam
+samtools flagstat bova_4-2/bova_4-2.Aligned.out.sorted.bam
+samtools flagstat bova_4-3/bova_4-3.Aligned.out.sorted.bam
+``` 
+
+Finally, run the script:
+```{bash, eval=F}
+nohup ./scripts/samtools_samples_1-4.sh > samples_1-4_nohup.out &
+```
+
+## Processing Co-Culture Samples:
+### Step 1: Alignment
+Since my samples were already trimmed I'm just going to start with the alignment and align each sample to each reference genome. I also wrote a script this time around because ain't nobody got time for that:
+
+```{bash, eval=F}
+emacs alignment_script.sh
+
+#!/bin/bash
+#PBS -l nodes=1:ppn=8
+#PBS -l walltime=24:00:00
+
+STAR --genomeDir ../Ref/index/bfrag_ASM2598v1_index \
+  --readFilesIn ../../fastq/5-1_R1_fastp_fastq.gz  ../../fastq/5-1_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_000025985.1_ASM2598v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bfrag_5-1.
+
+STAR --genomeDir ../Ref/index/bfrag_ASM2598v1_index \
+  --readFilesIn ../../fastq/5-2_R1_fastp_fastq.gz  ../../fastq/5-2_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_000025985.1_ASM2598v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bfrag_5-2.
+
+STAR --genomeDir ../Ref/index/bfrag_ASM2598v1_index \
+  --readFilesIn ../../fastq/5-3_R1_fastp_fastq.gz  ../../fastq/5-3_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_000025985.1_ASM2598v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bfrag_5-3.
+  
+STAR --genomeDir ../Ref/index/bfrag_ASM2598v1_index \
+  --readFilesIn ../../fastq/6-1_R1_fastp_fastq.gz  ../../fastq/6-1_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_000025985.1_ASM2598v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bfrag_6-1.
+
+STAR --genomeDir ../Ref/index/bfrag_ASM2598v1_index \
+  --readFilesIn ../../fastq/6-2_R1_fastp_fastq.gz  ../../fastq/6-2_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_000025985.1_ASM2598v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bfrag_6-2.
+  
+
+# Aligning to B. ovatus  
+STAR --genomeDir ../Ref/index/bova_ASM701232v1_index \
+  --readFilesIn ../../fastq/5-1_R1_fastp_fastq.gz  ../../fastq/5-1_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_007012325.1_ASM701232v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bova_5-1.
+
+STAR --genomeDir ../Ref/index/bova_ASM701232v1_index \
+  --readFilesIn ../../fastq/5-2_R1_fastp_fastq.gz  ../../fastq/5-2_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_007012325.1_ASM701232v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bova_5-2.
+
+STAR --genomeDir ../Ref/index/bova_ASM701232v1_index \
+  --readFilesIn ../../fastq/5-3_R1_fastp_fastq.gz  ../../fastq/5-3_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_007012325.1_ASM701232v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bova_5-3.
+  
+STAR --genomeDir ../Ref/index/bova_ASM701232v1_index \
+  --readFilesIn ../../fastq/6-1_R1_fastp_fastq.gz  ../../fastq/6-1_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_007012325.1_ASM701232v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bova_6-1.
+
+STAR --genomeDir ../Ref/index/bova_ASM701232v1_index \
+  --readFilesIn ../../fastq/6-2_R1_fastp_fastq.gz  ../../fastq/6-2_R2_fastp_fastq.gz \
+  --readFilesCommand zcat \
+  --sjdbGTFfile ../Ref/GCA_007012325.1_ASM701232v1_genomic.gtf \
+  --runThreadN 4 \
+  --outSAMtype SAM \
+  --outFilterType BySJout \
+  --outFileNamePrefix bova_6-2.
+
+## move all files to their respective directories
+mv bfrag_5-1* bfrag_5-1
+mv bfrag_5-2* bfrag_5-2
+mv bfrag_5-3* bfrag_5-3
+mv bfrag_6-1* bfrag_6-1
+mv bfrag_6-2* bfrag_6-2
+
+mv bova_5-1* bova_5-1
+mv bova_5-2* bova_5-2
+mv bova_5-3* bova_5-3
+mv bova_6-1* bova_6-1
+mv bova_6-2* bova_6-2
+```
+
+Due to alignment taking a while, I created a script called samtools_mixed_samples.sh containing all of the samtools lines for samples 5 and 6 to run after alignment finished.
+
+```{bash, eval=F}
+emacs samtools_mixed_samples.sh
+
+#!/bin/bash
+#PBS -l nodes=1:ppn=8
+#PBS -l walltime=24:00:00
+
+echo Sorting sam files  
+# B. fragilis  
+samtools sort bfrag_5-1/bfrag_5-1.Aligned.out.sam -o bfrag_5-1/bfrag_5-1.Aligned.out.sorted.sam
+samtools sort bfrag_5-2/bfrag_5-2.Aligned.out.sam -o bfrag_5-2/bfrag_5-2.Aligned.out.sorted.sam
+samtools sort bfrag_5-3/bfrag_5-3.Aligned.out.sam -o bfrag_5-3/bfrag_5-3.Aligned.out.sorted.sam
+samtools sort bfrag_6-1/bfrag_6-1.Aligned.out.sam -o bfrag_6-1/bfrag_6-1.Aligned.out.sorted.sam
+samtools sort bfrag_6-2/bfrag_6-2.Aligned.out.sam -o bfrag_6-2/bfrag_6-2.Aligned.out.sorted.sam
+
+# B. Ovatus
+samtools sort bova_5-1/bova_5-1.Aligned.out.sam -o bova_5-1/bova_5-1.Aligned.out.sorted.sam
+samtools sort bova_5-2/bova_5-2.Aligned.out.sam -o bova_5-2/bova_5-2.Aligned.out.sorted.sam
+samtools sort bova_5-3/bova_5-3.Aligned.out.sam -o bova_5-3/bova_5-3.Aligned.out.sorted.sam
+samtools sort bova_6-1/bova_6-1.Aligned.out.sam -o bova_6-1/bova_6-1.Aligned.out.sorted.sam
+samtools sort bova_6-2/bova_6-2.Aligned.out.sam -o bova_6-2/bova_6-2.Aligned.out.sorted.sam
+
+echo Converting sam to bam files
+# B. fragilis
+samtools view -S -b bfrag_5-1/bfrag_5-1.Aligned.out.sorted.sam > bfrag_5-1/bfrag_5-1.Aligned.out.sorted.bam
+samtools view -S -b bfrag_5-2/bfrag_5-2.Aligned.out.sorted.sam > bfrag_5-2/bfrag_5-2.Aligned.out.sorted.bam
+samtools view -S -b bfrag_5-3/bfrag_5-3.Aligned.out.sorted.sam > bfrag_5-3/bfrag_5-3.Aligned.out.sorted.bam
+samtools view -S -b bfrag_6-1/bfrag_6-1.Aligned.out.sorted.sam > bfrag_6-1/bfrag_6-1.Aligned.out.sorted.bam
+samtools view -S -b bfrag_6-2/bfrag_6-2.Aligned.out.sorted.sam > bfrag_6-2/bfrag_6-2.Aligned.out.sorted.bam
+
+# B. ovatus
+samtools view -S -b bova_5-1/bova_5-1.Aligned.out.sorted.sam > bova_5-1/bova_5-1.Aligned.out.sorted.bam
+samtools view -S -b bova_5-2/bova_5-2.Aligned.out.sorted.sam > bova_5-2/bova_5-2.Aligned.out.sorted.bam
+samtools view -S -b bova_5-3/bova_5-3.Aligned.out.sorted.sam > bova_5-3/bova_5-3.Aligned.out.sorted.bam
+samtools view -S -b bova_6-1/bova_6-1.Aligned.out.sorted.sam > bova_6-1/bova_6-1.Aligned.out.sorted.bam
+samtools view -S -b bova_6-2/bova_6-2.Aligned.out.sorted.sam > bova_6-2/bova_6-2.Aligned.out.sorted.bam
+
+echo Indexing bam files to create bai files
+# B. fragilis
+samtools index bfrag_5-1/bfrag_5-1.Aligned.out.sorted.bam
+samtools index bfrag_5-2/bfrag_5-2.Aligned.out.sorted.bam
+samtools index bfrag_5-3/bfrag_5-3.Aligned.out.sorted.bam
+samtools index bfrag_6-1/bfrag_6-1.Aligned.out.sorted.bam
+samtools index bfrag_6-2/bfrag_6-2.Aligned.out.sorted.bam
+
+# B. ovatus
+samtools index bova_5-1/bova_5-1.Aligned.out.sorted.bam
+samtools index bova_5-2/bova_5-2.Aligned.out.sorted.bam
+samtools index bova_5-3/bova_5-3.Aligned.out.sorted.bam
+samtools index bova_6-1/bova_6-1.Aligned.out.sorted.bam
+samtools index bova_6-2/bova_6-2.Aligned.out.sorted.bam
+
+echo Counting flag types
+# B. fragilis
+samtools flagstat bfrag_5-1/bfrag_5-1.Aligned.out.sorted.bam
+samtools flagstat bfrag_5-2/bfrag_5-2.Aligned.out.sorted.bam
+samtools flagstat bfrag_5-3/bfrag_5-3.Aligned.out.sorted.bam
+samtools flagstat bfrag_6-1/bfrag_6-1.Aligned.out.sorted.bam
+samtools flagstat bfrag_6-2/bfrag_6-2.Aligned.out.sorted.bam
+
+# B. ovatus
+samtools flagstat bova_5-1/bova_5-1.Aligned.out.sorted.bam
+samtools flagstat bova_5-2/bova_5-2.Aligned.out.sorted.bam
+samtools flagstat bova_5-3/bova_5-3.Aligned.out.sorted.bam
+samtools flagstat bova_6-1/bova_6-1.Aligned.out.sorted.bam
+samtools flagstat bova_6-2/bova_6-2.Aligned.out.sorted.bam
+```
+
+Then to run the actual script:
+```{bash, eval=F}
+nohup ./scripts/samtools_mixed_samples.sh > mixed_samples_nohup.out &
+```
+
+### Step 3: Alignment QC
+Next, I used [**Picard Tools**](https://broadinstitute.github.io/picard/) to double check that the alignment makes sense and to mark PCR duplicates to try to minimize bias in downstream analyses
+
+First for this analysis I wrote a script to copy all of the bam files into a new folder called `alignmentQC`
+
+#### Running MarkDuplicates
+As a shortcut I ran this process on all samples using [**MarkDuplicates**](https://broadinstitute.github.io/picard/command-line-overview.html#MarkDuplicates) in the **Picard Tools** package:
+
+```{bash, eval=F}
+mkdir alignmentQC
+mv bfrag*/*.Aligned.out.sorted.b* ../alignmentQC
+mv bova*/*.Aligned.out.sorted.b* ../alignmentQC
+
+cd ../alignmentQC
+mkdir bam_files
+mkdir bam_files/bfrag_bams
+mkdir bam_files/bova_bams
+mv bfrag* bam_files/bfrag_bams
+mv bova* bam_files/bova_bams
+
+# Making the script to run MarkDuplicates:
+emacs mark_dups.sh
+
+#!/bin/bash
+#PBS -l nodes=1:ppn=8
+#PBS -l walltime=24:00:00
+ls *.Aligned.out.sorted.bam | while read x; do
+
+  # save the file name
+  sample=`echo "$x"`
+  # get everything in file name before "/" (to remove '../alignment/')
+  sample=`echo "$sample" | cut -d"/" -f3`
+  # get everything in file name before "_" e.g. "bfrag_1-1"
+  sample=`echo "$sample" | cut -d"." -f1`
+  echo processing "$sample"
+
+  # run MarkDuplicates
+   picard MarkDuplicates \
+    I=${sample}.Aligned.out.sorted.bam \
+    O=${sample}.Aligned.dups.sorted.marked.bam \
+    M=${sample}.dups.out \
+    OPTICAL_DUPLICATE_PIXEL_DISTANCE=100 \
+    CREATE_INDEX=false ;
+done
+
+# For B. fragilis samples:
+cd bam_files/bfrag_bams
+nohup mark_dups.sh > bfrag_mark_dups.nohup.out &
+
+# For B. ovatus samples:
+cd ../bova_bams
+nohup mark_dups.sh > bova_mark_dups.nohup.out &
+```
+
+#### Make the QC report with [**MultiQC**](https://multiqc.info/docs/)
+Next I wanted to aggregate all of the MarkDuplicates data into one place to compare across the whole dataset using `MultiQC`:
+
+```{bash, eval=F}
+# move STAR final.out files over to /alignment.qc/bfrag_final_outs
+cd ../../
+mkdir bfrag_final_outs
+cd bfrag_final_outs
+mv ../../alignment/bfrag*/*.final.out ./
+mkdir bova_final_outs
+cd bova_final_outs
+mv ../../alignment/bova*/*.final.out ./
+```
+
+```{bash, eval=F}
+# run multiqc on bfrag_final_outs
+multiqc . --filename "Multiqc/bfrag_multiqc.alignment.qc"
+```
+![MultiQC Report for B. fragilis Aligned Samples](Multiqc/bfrag_multiqc.alignment.qc.html){width=100%}
+
+
+```{bash, eval=F}
+# run multiqc on bova_final_outs
+multiqc . --filename "Multiqc/bova_multiqc.alignment.qc"
+```
+![MultiQC Report for B. ovatus Aligned Samples](Multiqc/bova_multiqc.alignment.qc.html){width=100%}
+
+**NOTE:** Based on these results it looks like samples 5-2, 5-3, 6-1 and 6-2 were mislabeled. The sample 5 replicates appear to have more B. ovatus in them than the sample 6 replicates. These will therefore be relabeled, including the fastqs so that this error won't be made in the future.
+
+# Running HTSeq-Counts on the samples:
+Now we want to assign counts to each gene from the gtf file in the `Ref` folder. To run this in a loop I made a script that performed this using the [**htseq_counts**](https://htseq.readthedocs.io/en/master/) package on the files that were just marked for duplicates.
+
+```{bash, eval=F}
+mkdir htseq_counts/
+mkdir bfrag_counts/ bova_counts/
+cd htseq_counts
+emacs bfrag_htseq_counts.sh
+
+#!/bin/bash
+#PBS -l nodes=1:ppn=8
+#PBS -l walltime=24:00:00
+echo starting B. fragilis samples
+ls ../alignmentQC/bam_files/bfrag_bams/*.Aligned.dups.sorted.marked.bam | while read x; do
+
+  # save the file name
+  sample=`echo "$x"`
+  # get everything in file name before "/" (to remove '../alignment/')
+  sample=`echo "$sample" | cut -d"/" -f5`
+  # get everything in file name before "_" e.g. "bfrag_1-1"
+  sample=`echo "$sample" | cut -d"." -f1`
+  echo processing "$sample"
+  
+  htseq-count \
+	-f bam \
+	-s no \
+	-r pos \
+	-t gene \
+	../alignmentQC/bam_files/bfrag_bams/${sample}.Aligned.dups.sorted.marked.bam \
+	../Ref/GCA_000025985.1_ASM2598v1_genomic.gtf > bfrag_counts/${sample}.htseq-counts
+done
+
+nohup ./bfrag_htseq_counts.sh > bfrag_htseq_counts.nohup.out &
+
+emacs bova_htseq_counts.sh
+#!/bin/bash
+#PBS -l nodes=3:ppn=8
+#PBS -l walltime=24:00:00
+echo starting B. ovatus samples
+ls ../alignmentQC/bam_files/bova_bams/*.Aligned.dups.sorted.marked.bam | while read x; do
+
+  # save the file name
+  sample=`echo "$x"`
+  # get everything in file name before "/" (to remove '../alignmentQC/bam_files/bova_bams/')
+  sample=`echo "$sample" | cut -d"/" -f5`
+  # get everything in file name before "_" e.g. "bova_3-3"
+  sample=`echo "$sample" | cut -d"." -f1`
+  echo processing "$sample"
+  
+  htseq-count \
+	-f bam \
+	-s no \
+	-r pos \
+	-t gene \
+	../alignmentQC/bam_files/bova_bams/${sample}.Aligned.dups.sorted.marked.bam \
+	../Ref/GCA_007012325.1_ASM701232v1_genomic.gtf > bova_counts/${sample}.htseq-counts
+done
+
+nohup ./bova_htseq_counts.sh > bova_htseq_counts.nohup.out &
+```
+
+**NOTE:** There was an annotation error with gene ID *DYI28_29295* on the first plasmid *CP041396.1*, where the coordinates were incorrect and were labelled as "116,632 - 48". After checking in Geneious, I found the true coordinates to be "116,632 - 116,846", so I opened the GTF file in emacs and fixed the issue manually. Then the bova script ran fine. 
+
+### Generate the gene expression matrix of raw read counts
+
+The final step in the pre-processing of RNA-seq data for differential expression analysis is to concatenate the read counts into a gene expression matrix that contains the counts from all the samples.
+
+To do this we loop over htseq-count output files and extract the read count column:
+```{bash, eval=F}
+# set up an array that we will fill with shorthand sample names
+myarray=()
+
+# loop over htseq.counts files and extract 2nd column (the raw read counts) using 'cut' command
+while read x;  do
+	# split up sample names to remove everything after "-"
+	sname=`echo "$x"`
+	sname=`echo "$sname" | cut -d"." -f1`
+	# extract second column of file to get read counts only 
+	echo counts for "$sname" being extracted
+	cut -f2 $x > "$sname".tmp.counts
+	# save shorthand sample names into an array  
+	sname2="$sname"
+	myarray+=($sname2)
+done < <(ls -1 *.htseq-counts | sort)
+```
+
+To paste all gene IDs into a file with each to make the gene expression matrix:
+```{bash, eval=F} 
+# extract ENSG gene IDs from one of the files 
+cut -f1 bova_3-3.htseq-counts > gene_IDs.txt
+
+# use the paste command to put geneIDs and raw counts for all files in 1 file
+paste gene_IDs.txt *.tmp.counts > tmp_all_counts.txt
+
+# check it looks good 
+head tmp_all_counts.txt 
+```
+
+Then save sample names in the array into text file: 
+```{bash, eval=F} 
+# look at the contents of the array we made with shorthand sample names 
+echo ${myarray[@]}
+
+# print contents of array into text file with each element on a new line 
+printf "%s\n" "${myarray[@]}" > names.txt
+cat names.txt
+```
+
+Put the sample names in the file with the counts to form row headers and complete the gene expression matrix:
+```{bash, eval=F} 
+# make a file to fill 
+touch all_counts.txt
+
+# use the 'cat' command (concatenate) to put all tmp.counts.txt files into all_counts.txt
+cat <(cat names.txt | sort | paste -s) tmp_all_counts.txt > all_counts.txt
+
+# view head of file 
+head all_counts.txt
+
+# how many lines 
+wc -l all_counts.txt
+``` 
+
+Finally, remove all the tmp files:
+```{bash, eval=F} 
+rm -f *tmp*
+```
+
+## Running Differential Expression Analysis on Samples:
+First I want to load all of the required packages for each comparison:
+```{r, include=F}
+library(dplyr)
+library(ggplot2)
+library(tximport)
+library(DESeq2)
+library(biomaRt)
+library(vsn)
+library(pheatmap)
+library(gplots)
+library(RColorBrewer)
+library(ComplexHeatmap)
+library(circlize)
+library(xtable)
+library(kableExtra)
+```
+
+***
+
+## Comparing Tet+ and Tet- Samples to One Another:
+The first comparison I wanted to do was the *B. fragilis* tetracycline samples to look at the expression differences with and without antibiotic
+
+### Read in raw count data 
+I downloaded the all_counts.txt matrix that I generated on the Dartmouth server and split it into multiple smaller files that I will use for each comparison. These file names will be designated in the `read.table` command for each comparison.
+```{r}
+# read in the matrix generated using htseq-count 
+cts <- as.matrix(read.table("Counts/bfrag_alone_all_counts.txt", 
+                            sep = "\t", 
+                            header = TRUE, 
+                            row.names=1, 
+                            stringsAsFactors = F))
+
+# filter out last 5 rows 
+cts <- cts[1:(nrow(cts)-5),]
+
+# Check to make sure it's good
+head(cts)
+tail(cts)
+```
+
+### Read in sample metadata
+I also need to read in the sample annotation (metadata) that I created which contains sample and experimental labels. 
+
+```{r}
+# read in the  metadata that has sample/experimental labels 
+colData <- read.csv("Metadata/bfrag_metadata.csv", row.names=1)
+head(colData)
+
+# order by bacteroides_type 
+colData <- colData[order(colData$bacteroides_type),]
+
+# quick look 
+head(colData)
+```
+
+I want to take a look at the experimental design variables (conditions). 
+```{r}
+# now want to make this a factor as it will be the variable used to define groups for the differential expression analysis 
+colData$condition
+```
+
+It is important that we make this variable a (`factor`) class variable, with the reference group (first listed condition) set as the variable we want to be considered baseline expression. If it had not already been done, can create an ordered factor variable from a character string in R using: 
+```{r}
+colData$condition <- factor(colData$condition, levels=c("tet_minus", "tet_pos"))
+```
+
+### Construct the DESeq2 data set & explore the characteristics of the data 
+[**DESeq2**](https://bioconductor.org/packages/release/bioc/manuals/DESeq2/man/DESeq2.pdf) provides a specific function `DESeqDataSetFromHTSeqCount` to read in gene-level read count abundances from *htseq-count*. 
+
+**DESeq2** uses an object class called the `DESeqDataSet` that stores the read counts, metadata, experimental design, and all the intermediate values calculated during the analysis. `DESeqDataSet` extends the `SummarizedExperiment` class object from the `SummarizedExperiment` R/Bioconductor package that is commonly used to store data from expression studies and other genomics assays in R.
+
+Creating the `DESeqDataSet` object:
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = colData,
+                              design = ~ condition)
+```
+
+In the future I could have also tried doing this using the `DESeqDataSetFromHTSeqCount()` function by specifying a `SampleTable` that includes the path to the htseq-count files, however since the read counts were compiled into one file, the dataset can just be loaded directly. 
+
+Before moving on, I wanted to explore the DESeq2 class object a bit to get to familiar with its contents. 
+```{r}
+# have a quick look at the object 
+dds
+
+# print structure 
+str(dds)
+
+# several accessor functions exist to access specific data 'slots'
+head(counts(dds))
+head(colData(dds))
+
+# specific slots can also be accessed using the '@'
+dds@colData
+```
+
+I want to drop genes that have less than 10 reads across all samples, as there just isn't enough information for these genes to fit robust statistical models to. 
+
+```{r}
+# drop genes with low counts 
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+dim(dds)
+```
+
+Lets also save the DESeq object at this point (so that we don't have to do the above every time we want to work with our data). 
+
+```{r}
+save(dds, file = "bfrag_alone_DESeq2_220603.rdata")
+```
+
+### Normalization of raw counts 
+Before comparing expression levels of specific genes between samples, and performing any differential expression analyses, I needed to normalize the data to account for variation in expression that is not related to true differential expression. There are two major sources variation that have to be adjusted for in the normalization process for RNA-seq data when we wish to compare expression levels between samples: 
+
+#### Library size/sequencing depth  
+
+Although we generally try to pool samples together (each sample is tagged with a barcode and samples are combined) at similar concentrations in a sequencing run, some samples will end up being sequenced more than others, leading to slight differences in how many reads are produced for that sample, and therefore sequencing depth and size. Furthermore, if samples are sequenced on separate runs, their sequencing depths may be very different. If we don't account for this variation in sequencing depth, we might conclude some genes are expressed at greater levels in a sample that has simply been sequenced to a higher depth. 
+
+#### Library composition 
+
+The presence of truly differentially expressed genes (in particular, DEGs with very large fold changes) between samples will cause the number of reads for other genes in those samples to be skewed. For example, in the below example, gene C is differentially expressed between the two samples, with much higher expression in sample 1. This high number of reads causes fewer reads to be detected for other genes in this sample, making it appear that these other genes are expressed at lower levels than in sample 2, however this is simply an artifact of library composition differences between the samples. 
+
+To correct for **library size** AND **library composition**, DESeq2 uses a algorithm referred to as the **median-of-ratios** method. A brief summary of the steps is:  
+
+1. Take the log of all values in raw count matrix  
+2. Average each row (genes)
+3. Filter out genes with Infinity values
+4. Subtract average log count value from log of count for each cell (due to the laws of working with logarithms, this is essentially calculating the ratio of the counts for gene X in 1 sample to the average counts for gene X across all samples)
+5. Calculate the median of the ratios in each sample (column)
+6. Take exponents of medians to get the **size factors** for each sample/library. 
+7. Divide the count for each gene in each sample by the size factor calculated for that sample. 
+
+This procedure will generate a matrix of read counts that are corrected for both **library size** and **library composition**, and are stored in our (`DESeqDataset`) object. DESeq2 uses the function (`estimateSizeFactors()`) to perform this algorithm and calculate size factors for each sample. To do this for the (`DESeqDataset`). 
+
+```{r}
+dds <- estimateSizeFactors(dds)
+```
+
+Once the size factors are calculated, you can look at their distribution to get a feel for how they vary and how much normalization between the samples is required. 
+
+```{r}
+sizeFactors(dds)
+hist(sizeFactors(dds), 
+     breaks=6, col = "cornflowerblue",
+     xlab="Size factors", ylab="No. of samples", 
+     main= "Size factor distribution over samples")
+```
+
+I can then use the `counts()` function, with `normalized` set to `TRUE`, to return the matrix of counts where each column (each library/sample) has been divided by the size factors calculated by the `estimateSizeFactors()` function. 
+
+```{r}
+counts_norm <- counts(dds, normalized=TRUE)
+head(counts_norm)
+```
+
+Comparing the normalized to the raw counts, it's clear they are different. 
+
+```{r}
+head(counts(dds, normalized=FALSE))
+```
+
+To compare values for individual genes across samples, these normalized read counts can be used. It's also a good (sanity) check to look at the expression of a few genes of interest, before actually doing any statistical modelling. I chose *gyrB* as an essential gene.
+
+```{r}
+# lets make a function to generate a quick plot of the normalized counts 
+gene_plot <- function(BF9343, gene_symbol){
+  # save the normalized counts in a dataframe 
+  cnts <- counts(dds, normalized=TRUE)
+  colnames(cnts) <- colData(dds)$condition
+  # extract the counts for specified BF9343 ID and add sample group data
+  df1 <- data.frame(log2(cnts[BF9343,]), colData(dds)$condition)
+  colnames(df1) <- c(paste0("log2_gene"), "condition")
+  # use ggplot2 to make a plot of counts vs sample group 
+  p1<- ggplot(df1, aes(condition, log2_gene)) + 
+    geom_jitter(aes(color = condition)) + 
+    ggtitle(paste0(gene_symbol), " - Log2 Normalized counts")
+  # print the plot 
+  print(p1)
+}
+
+# now apply the function to print a plot for a specified gene 
+gene_plot(BF9343 = "BF9343_0242", gene_symbol = "gyrB")
+```
+It looks like there's one tet- sample that has gyrB expression much lower than the others, but with the y axis range being so small relatively speaking, I think it'll be okay.
+
+### Exploratory Data Analysis & QC
+#### PCA Plots
+
+PCA is a mathematical procedure that calculates vectors that explain variation in the dataset (in this case, variation in gene expression), and orders samples along these vectors. The expectation is that samples that are more similar to each other, e.g. replicates, would be very close to each other along these axes of variation, while we might expect samples in different treatment groups to be further away.
+
+Each vector that is calculated is called a principal component (PC), and each principal component explains less variation in our dataset than the last. e.g, PC1 explains more variation in gene expression differences between the samples than PC2. If we plot PC1 against PC2, samples will ‘cluster’ with other samples that have similar gene expression profiles, and be further away from samples with more distant expression profiles.
+
+We can illustrate the benefit of using the rlog over standard log transformation (+ a pseudo-count for genes with 0 counts where the log of 0 is infinity) by comparing the transformed values for two samples against each other.
+```{r}
+rld <- rlog(dds, blind = FALSE)
+head(assay(rld))
+
+par(mfrow=c(1,2))
+plot(log2(cts[,1]+1), log2(cts[,2]+1), col = "cornflowerblue", xlab = "Sample 1", ylab = "Sample 2", main = "Log2 + 1")
+plot(assay(rld)[,1], assay(rld)[,2], col = "indianred", xlab = "Sample 1", ylab = "Sample 2", main = "rlog")
+```
+
+We can use these transformed values to investigate how many features (genes) in our dataset exhibit variability across samples. This is useful to know as we only want to use variable features for PCA. Genes that don’t explain any variation in the dataset aren’t useful for helping us explore differences between the samples.
+```{r}
+# calculate gene expression level variance between samples 
+var <- rev(rowVars(assay(rld))[order(rowVars(assay(rld)))])
+
+# plot variance for genes accross samples
+plot(var, las = 1, main="Sample gene expression variance", xlab = "Gene", ylab = "Variance")
+abline(v=1000, col="red") ; abline(v=500, col="green") ; abline(v=250, col="blue")
+```
+
+At around 500 genes, the variance starts to spike upwards, so this is the number of variable features (genes) to use. I'm going to restrict the dataset to 500 genes for purposes of the PCA. I therefore need to extract and visualize the variance explained by each PC to determine which are most informative.
+
+```{r}
+# modify variable feature number to be used in PCA and hierachical clutering based on no. of most variable features 
+var_feature_n <- 500 
+
+# perform PCA and order by variance 
+rv <- rowVars(assay(rld))
+select <- order(rv, decreasing = TRUE)[seq_len(min(var_feature_n, length(rv)))]
+pca <- prcomp(t(assay(rld)[select, ]))
+
+# extract the variance explained by each PC 
+percentVar <- pca$sdev^2/sum(pca$sdev^2)
+names(percentVar)[1:5] <- c("PC1", "PC2", "PC3", "PC4", "PC5")
+percentVar <- percentVar[1:5]
+
+# plot variance for top 10 PCs 
+barplot(percentVar[1:5], col = "indianred", las = 1, ylab = "% Variance", cex.lab = 1.2)
+```
+
+The majority of variance is explained by the first few PCs, therefore visualizing where samples fall along these PCs will be the most informative way to identify major differences between them, based on their gene expression profiles. To generate a PCA plot for PC1 vs PC2:
+```{r}
+# construct data frame w/ PC loadings and add sample labels 
+pca_df <- as.data.frame(pca$x)
+pca_df$condition <- dds@colData$condition
+pca_df$sample_ids <- colnames(dds)
+
+# add colors for plotting to df 
+pca_df$col <- NA
+for(i in 1:length(levels(pca_df$condition))){
+  ind1 <- which(pca_df$condition == levels(pca_df$condition)[i])
+  pca_df$col[ind1] <- i
+}
+
+# plot PC1 vs PC2
+plot(pca_df[, 1], pca_df[, 2], 
+     xlab = paste0("PC1 (", (round(percentVar[1], digits=3)*100), "% variance)"), 
+     ylab = paste0("PC2 (", (round(percentVar[2], digits=3)*100), "% variance)"),
+     main=paste0("PC1 vs PC2 for ", var_feature_n, " most variable genes"),
+     pch=16, cex=1.35, cex.lab=1.3, cex.axis = 1.15, las=1, 
+     panel.first = grid(),
+     col=pca_df$col)
+text((pca_df[, 2])~(pca_df[, 1]), labels = pca_df$condition, cex=0.6, font=2, pos=4)
+```
+
+#### Hierarchial Clustering
+Hierarchical clustering is another complimentary approach to explore the relationships between samples. While supervised clustering approaches exist, we will perform an unsupervised analysis so that we do not impose any restrictions on the clustering of the samples.
+
+Hierachical clustering is often associated with heatmaps, as it is a useful way to explore the results of hierachical clustering. Here we represent genes are rows, and individual samples as columns. The denrograms on the rows and the columns represent the ‘distances’ calculated between each of the genes/samples. Presenting the data in this way is useful as it allows us to identify samples whose patterns of gene expression are similar to each other, but also modules of genes that change in a similar way across our samples, and may share some common function of interest.
+
+The first step in a hierachical clustering analysis is to scale the data. This means that expression levels are all transformed onto the same scale before clustering. This is important to do as we can only visualize so many colors at once, and a very highly expressed gene would mean that all the other genes would essentially invisible on this scale. Scaling for clustering in this way is typically performed by calculating Z-scores, where the mean for each gene across all the samples is subtracted from each of the individual expression values for each gene, this centers the expression values around 0. We then divide these values by the standard deviation to make sure the data is more tightly grouped, and we can represent lots of genes in the same scale.
+
+```{r}
+# select top X no. of variable genes 
+topVarGenes <- head(order(rowVars(assay(rld)), decreasing=TRUE),
+                    var_feature_n)
+
+# set up gene expression matrix 
+mat1 <- assay(rld)[topVarGenes,]
+
+# scale matrix by each col. values 
+mat_scaled = t(apply(mat1, 1, scale))
+
+# set up colors for heatmap 
+col = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+cols1 <- brewer.pal(11, "Paired")
+cols2 <- brewer.pal(9, "Greens")
+
+# set up annotation bar for samples 
+ha1 = HeatmapAnnotation(Group = colData(dds)$condition, 
+                        col = list(Group = c("tet_minus" = cols1[1], 
+                                             "tet_pos" = cols1[2])), 
+                                   show_legend = TRUE)
+
+# set up column annotation labels (samples)
+ha = columnAnnotation(x = anno_text(colData(dds)$condition, 
+                                    which="column", rot = 45, 
+                                    gp = gpar(fontsize = 10)))
+
+# generate heatmap object 
+ht1 = Heatmap(mat_scaled, 
+              name = "Expression", 
+              col = col, 
+              top_annotation = c(ha1), 
+              bottom_annotation = c(ha),
+              show_row_names = FALSE)
+
+# plot the heatmap 
+draw(ht1, row_title = "Genes", column_title = "Top 500 most variable genes")
+```
+
+While the samples cluster on the dendograms really well, the raw expression data of the top 500 genes is kind of all over the place prior to running the differential expression analysis.
+
+### Apply DESeq2 procedure to the data
+```{r}
+# run the DEseq2 analysis 
+dds <- DESeq(dds)
+```
+
+Before running the differential expression analysis, I want to look at some of the standard characteristics of RNA-seq data. The first and most obvious thing to do is look at how the distribution of the raw counts.
+```{r}
+hist(counts(dds, normalized=FALSE)[,5], breaks = 500, col="blue",
+     xlab="Raw expression counts", ylab="Number of genes",
+     main = "Count distribution for sample X")
+```
+
+Perhaps the most obvious feature of this distribution is the large number of genes with very low count values. This occurs as there are many genes expressed at low levels relative to the highly expressed genes, which are fewer in number. This causes the distribution to have a long right tail, ultimately causing the dynamic range of RNA-seq data to be very large. 
+
+These features of how RNA-seq data is distributed are important in selecting the statistical model used to test differential expression. Importantly, we can see from the histogram that the data is **not** normally distributed, therefore any statistical model based on the normal distribution is not appropriate for this dataset. By looking again at the matrix of raw counts, it is actually clear that RNA-seq is integer count data, therefore we should use a statistical model for count-based data. 
+
+```{r}
+head(counts(dds, normalized=FALSE))
+```
+At this point it might be useful to define a few terms that are really important to know in order to understand as we fit statistical models to RNA-seq data. 
+
+**mean** - the average count of a gene across samples
+**variance** - the spread of count values across samples for a gene
+**dispersion** - the amount that the variance deviates from the mean
+
+One commonly used distribution for count data is **Poisson distribution**, however, there is a feature of RNA-seq data that makes the Poisson distribution a little too simplistic for such data, called **overdispersion**. 
+
+**Overdispersion** describes the situation where the variance for a set of observations generally exceeds the mean of those observations. We can visualize overdispersion in RNA-seq data by plotting the mean-variance relationship for a group of replicates in our data. 
+```{r}
+# calculate mean and variance for group of replicates
+mean_counts <- apply(counts(dds, normalized=FALSE)[,1:3], 1, mean)
+variance_counts <- apply(counts(dds, normalized=FALSE)[,1:3], 1, var)
+
+# plot the mean variance trend 
+plot(log10(mean_counts), log10(variance_counts), 
+     ylim=c(0,9), xlim=c(0,9), 
+     ylab = "log10 (variance)", xlab = "log10 (mean counts)", 
+     main = "Mean-variance trend", las = 1)
+
+# add line for x=y
+abline(0,1,lwd=2,col="red")
+```
+
+**We can clearly see a few features of the mean variance trend from this plot:**
+1. The data does not fall along the x = y line, as it would if the mean = variance. Instead, the variance is generally greater than the mean, making the variance overdispersed. 
+2. There is more difference in the variance between low count genes than there is among higher count genes, therefore the variance is unequal across the range of count values (non-constant variance is sometimes referred to as **heteroscadicity**).
+
+To account for this **overdispersion**, we use a generalization of the *Poisson distribution* called the **negative-binomial (NB) distribution**. The NB dist. includes a **dispersion parameter** that accounts for the amount the variance exceeds the mean (the *Poisson variance*). It is clearly important that we do this, because **the variance changes dramatically depending on the expression level of the gene you are observing**. 
+
+We can plot a few different NB distributions to examine how the dispersion parameter affects the spread of the data.
+```{r}
+# generate a random variable using the negative binomial distribution
+### dispersion = 10
+par(mfrow=c(3,1))
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.001), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.001")
+### dispersion = 10
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.01), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.01")
+### dispersion = 10
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.1), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.1")
+```
+
+It is clear that as the dispersion increases, the variation around the mean also increases. The mean, variance, and dispersion are linked by the equation: 
+
+variance = mean + dispersion x 2 mean-squared ( var = mu + disp. * mu^2 )
+
+In order to accurately model differential expression for the genes in our dataset, `DESeq2` uses this equation to obtain estimates for the dispersion of each gene within each sample group (e.g. tet- and tet+ separately). 
+
+**However,** for the small number of replicates available in RNA-seq data, these estimates of dispersion at the gene-level are often inaccurate. 
+
+To improve these gene-level estimates of dispersion, `DESeq2` uses another statistical model called **empirical bayes** to *'shrink'* these initial dispersion estimates toward a *'prior'* mean, which is calculated by fitting a curve to the initial dispersion estimates. 
+
+This procedure produces **more accurate estimates of dispersion** as it shares information across genes with similar expression levels to predict a more appropriate dispersion for those genes. This is rational as the formula linking the mean, variance, and dispersion tells us that the variance is the only thing affecting the magnitude of the dispersion for genes with the similar mean expression. 
+
+**The major factors affecting how much a gene's dispersion is shrunk toward the prior mean are:**  
+1. the number of samples in the group under consideration (the more reps the better)  
+2. how far the initial dispersion is from the prior mean
+
+**We can plot the dispersion estimates for our own data using:**
+```{r fig.align="center"}
+plotDispEsts(dds)
+```
+An example of a well calibrated set of dispersion estimates would be seen due to two features: the final MAP estimates are well scattered around the fitted line, and the dispersion trend decreases with increasing mean expression. 
+
+If the MAP estimates were more structured in these plots, we would be concerned that the model is not estimating dispersions well for our data, indicating something may be wrong with the dataset, e.g. outlier samples, a batch effect, low quality samples/data, potential contamination etc.
+
+In this case it looks like there is a well-distributed around the fitted line, but while there is an initial decrease with increasing mean expression, it seems to level off. I'm not 100% sure what to make of that. 
+
+**It is important to confirm your dispersion estimates are well calibrated before performing your differential expression analysis, as accurate estimation of dispersion is critical in controlling the false-positive rate in experiments with smaller sample sizes (most RNA-seq experiments)**. 
+
+### Differential expression analysis - Hypothesis testing
+
+Now that we understand how the dispersions are estimated, we are ready to fit the data and test each gene for differential expression.
+
+We fit the data using a **generalized linear model (GLM)**. GLM's are a family of statistical models that generalize standard linear regression in two ways:  
+- use of probability distributions other than the normal distribution 
+- the use of a *link-function* that links the expression values in the linear model to the experimental groups, in a way that these other distributions (such as the NB) can be used. 
+
+Since we are need to model our counts using the negative-binomial distribution, the GLM we will fit is of the NB family of GLMs. 
+In order to fit the GLM, we need the **mean count of each gene** across the samples in each experimental group, and the **dispersion of that gene** in those groups. The mean count is a combination of the expected expression level and the size factor, so that our model is corrected for **library size and composition**. 
+
+The process of fitting the model to the expression and dispersion values for each gene results in final set of **model coefficients** for each sample group, which can be interpreted as the **log2 fold-change** in expression for that gene between the baseline group and each comparison group. 
+
+Each of the model coefficients has an associated **standard error** associated with it, which we can use to calculate a **P-value** and perform a process called **hypothesis testing**. Through hypothesis testing we test the *null hypothesis* that the log2 fold-change between experimental groups for an individual gene is not significantly different from 0 (no change in expression). 
+
+**The default test used by `DESeq2` for hypothesis testing is the *Wald-test*, which is implemented as follows: **  
+1. The *coefficient (log 2 fold-change)* is divided by the *standard error* (measure of statistical accuracy of the measurement).  
+2. The resulting *Z-statistic* is compared to a standard normal distribution (mean = 0, sd = 1) in order to compute a P-value.  
+3. If the P-value is less than our pre-determined threshold for significance, we reject the null hypothesis and accept the alternative, that the gene is significantly DE.  
+
+**Note:** `DESeq2` can also implement a *likelihood ratio test* (LRT), which is used to compare expression across more than two groups. For example, if you collected samples over a range of time points and you wanted to test if gene expression changed significantly over these time points, you could use the LRT instead of the wald-test. **It would be nice to try this out in the future**.
+
+`DESeq2` already performed all of the steps for hypothesis testing using the wald-test for us when we ran the `DESeq2()` function. All we have to do is tell DESeq2 which results we want to look at, which can be done using the `results()` function, and specifying the coefficients that we want by using the `names` argument. 
+```{r fig.align="center"}
+# quickly check the available coefficients we could extract 
+resultsNames(dds)
+# get results for DEG analysis (and order by Pval) by specifying design 
+res <- results(dds, 
+  name = "condition_tet_pos_vs_tet_minus", 
+  alpha = 0.05, 
+  lfcThreshold = 0)
+res
+```
+**A couple of things to note here:**  
+
+- `alpha` is set to 0.05 (5%) to correct the P-values for multiple hypothesis testing (example with more detail on this coming up below). By default, the "BH" method is used (Benjamini & Hochberg) which controls the false discovery rate (FDR). Corrected P-values are found in the `padj` column of the `results()` output, while the uncorrected P-values are found in the `pvalue` column. Other methods to control for multiple hypothesis testing can be specified using the `pAdjustMethod` argument in the `results()` function, such as the more conservative **Bonferonni** method. 
+
+- `lfcThreshold` is set to 0, and is the default value. This tests the hypothesis that the log2 fold change values between our experimental conditions are equal to 0. Different fold change values can be specified, which can be useful if you observe a large number of significantly differentially expressed genes with small fold changes, and you want to restrict the test to the genes with the largest differences (fold changes) between your conditions (we could also achieve this by restricting the results to genes with significant P-values AND have an absolute fold change > a specific threshold, however when we do this, the P-values loose some of their meaning).  
+
+```{r}
+res <- results(dds, alpha = 0.05, 
+  contrast = c("condition", "tet_minus", "tet_pos"), 
+  lfcThreshold = 0)
+res
+```
+
+**Lets have a quick look at the results and how many genes were statistically significant at an adjusted P-value threshold of 0.05. **
+```{r}
+# order by adj Pval 
+res_ord <- res[order(res$padj),] 
+res_ord
+# quick check for how many DEGs with significance @ 5% level in either FC direction 
+sum(res$padj < 0.05, na.rm=TRUE)
+sum(res$padj < 0.05 & res$log2FoldChange > 1, na.rm=TRUE)
+sum(res$padj < 0.05 & res$log2FoldChange < -1, na.rm=TRUE)
+
+# or to get both padj < 0.05 and log2FoldChange > 2 or < -2
+sum(res$padj < 0.05 & res$log2FoldChange > 1| res$padj < 0.05 & res$log2FoldChange< -1, na.rm=TRUE)
+```
+
+You may have noticed I am using `na.rm=TRUE` in the `sum()` function above.
+
+```{r}
+table(is.na(res$padj))
+```
+
+This is not a mistake, but rather part of a deliberate filtering process conducted by `DESeq2`, in order to flag genes that have little or no change of being differentially expressed.
+
+This is of value as it means we can correct for fewer total tests and increase our statistical power to identify true positives.The three ways which `DESeq2` filters results are:   
+- Genes with counts = 0 in all samples
+- Genes with extreme outliers (determined using Cook's distance)
+- *Independent filtering* (identifying genes with low counts)
+
+*Independent filtering*, DESeq2 carries out an iterative process where it maximizes the value of the number of rejections over the quantiles of the mean normalized counts. Once the maximum number of rejections is identified, DESeq2 will select the quantile of the normalized counts that is 1 standard deviation below this maximum, and filter any results with mean counts below this threshold. It is essentially a fancy way of reducing the number of tests we need to run. 
+
+We can plot the number of rejections of the null hypothesis against mean counts, along with a vertical line, to help us understand at which mean count value DESeq2 chose to filter results for. Any genes with a mean expression value below this line will have their `padj` values set to NA, and discarded during multiple testing correction. 
+
+```{r fig.align="center"}
+plot(metadata(res_ord)$filterNumRej, 
+     type="b", ylab="number of rejections",
+     xlab="quantiles of filter (mean norm. counts)")
+lines(metadata(res_ord)$lo.fit, col="red")
+abline(v=metadata(res_ord)$filterTheta)
+```
+
+It's worth removing these results with NAs before moving forward to make our lives a little easier when handling the adjusted P-values. 
+```{r}
+res_ord <- res_ord[!is.na(res_ord$padj),]
+```
+
+### **Add gene annotation to the results** Come back to this in the future to figure out how to add actual gene names rather than numbers
+
+### Visualization of Differential Expression 
+#### Volcano plot
+
+```{r, message=FALSE, fig.align="center"}
+plot(res$log2FoldChange, -log10(res$pvalue), 
+     main = "Volcano plot", 
+     las = 1, col = "indianred",
+     ylab = "- log10 P-value", xlab = "log2 Fold change")
+
+# add horizontal lines to help guide interpretation
+abline(h=-log10(0.05/nrow(res)), lty = 2, col = "black") # Bonferonni 
+abline(h=-log10(0.05), lty = 2, col = "black") # nominal P-value 
+```
+  
+Here we can clearly see that there are quite a few genes above our significance threshold in both the up and downregulation directions (+ve and -ve fold changes), that also have absolute log2 fold change values of at least 1 or more. Of particular interest, there seem to be a few genes with very large fold change values & -log10 P-values, making them especially interesting as their effect size is large AND our confidence in this fold change is good. 
+
+It is a little hard to make specific inferences from this plot at the individual gene level, so some labels for interesting data points (and some colors) would definitely improve this volcano plot, and make it more informative. We will use the [**ggplot2**](https://cran.r-project.org/web/packages/ggplot2/ggplot2.pdf) R package to do this, and we will color each point based on a combination of fold change and P-value, as these determine which genes are of most interest to us. 
+```{r fig.align="center"}
+# save a dataframe from the results() output
+res_tmp <- as.data.frame(res_ord)
+
+# add a column that will be used to save the colors we want to plot 
+res_tmp$cols <- c()
+
+# set the significance cut off (alpha) and fold change threshold to be used for coloring of genes 
+## Original code
+# alpha <- 0.05/nrow(res)
+## Revised code
+alpha <- 0.05
+fc_cutoff <- 1
+
+# loop through our dataframe and add values to the color column based on magnitude of alpha and LFCs 
+res_tmp$cols <- NA
+for(i in 1:nrow(res_tmp)){
+    if(is.na(res_tmp$pvalue[i])){
+      res_tmp$cols[i] <- NA
+    }
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i] > fc_cutoff){
+      res_tmp$cols[i] <- "indianred"
+    } 
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i] < -fc_cutoff){
+      res_tmp$cols[i] <- "indianred"
+    } 
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i]>-fc_cutoff & res_tmp$log2FoldChange[i]<fc_cutoff){
+      res_tmp$cols[i] <- "cornflowerblue"
+    } 
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] > fc_cutoff){
+      res_tmp$cols[i] <- "gray47" 
+    }
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] < -fc_cutoff){
+      res_tmp$cols[i] <- "gray47" 
+    }
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] < fc_cutoff){
+      res_tmp$cols[i] <- "gray10" 
+    }
+}
+  
+
+res_tmp$gene <- rownames(res_tmp)
+# generate the splot 
+p = ggplot(res_tmp, aes(log2FoldChange, -log10(pvalue))) + 
+    geom_point(aes(col=col), alpha = 0.5, size =2, colour = res_tmp$cols, fill = res_tmp$cols)  + 
+    xlab("Log2 fold change") + ylab("-log10 P-value") +
+    ylim(0, 12) + 
+    xlim(-5, 5) +
+    geom_hline(yintercept = -log10(alpha), color = "black", linetype = "dashed", size = 0.4) + 
+    theme(legend.key = element_blank()) + 
+    theme_classic() +
+    ggtitle("Tet- vs Tet+") 
+
+# print the plot 
+print(p)
+```
+
+Also adding some labels for potentially interesting genes would be useful. For this I used the [**ggrepel**](https://cran.r-project.org/web/packages/ggrepel/ggrepel.pdf) package. 
+```{r fig.align="center"}
+library(ggrepel)
+p2 <- p + 
+  # add labels to genes w/ LFC > 2 and above alpha threshold
+  geom_label_repel(data = subset(res_tmp, log2FoldChange > 1 & pvalue < alpha), aes(label = gene), 
+                     box.padding   = 0.35,
+                     nudge_x = 0.1,
+                     nudge_y = 0.1,
+                     label.size = 0.1,
+                     segment.size = 0.3,
+                     segment.color = 'grey50', 
+                   size = 3) +
+  # add labels to genes w/ LFC < -2 and above alpha threshold
+  geom_label_repel(data = subset(res_tmp, log2FoldChange < -1 & pvalue < alpha), aes(label = gene), 
+                     box.padding   = 0.35,
+                     nudge_x = -0.1,
+                     nudge_y = 0.1,
+                     label.size = 0.1,
+                     segment.size = 0.3,
+                     segment.color = 'grey50', 
+                   size = 3) +
+  # add vertical fold change lines 
+  geom_vline(xintercept = fc_cutoff, colour = "black", linetype="dotted") + 
+  geom_vline(xintercept = -fc_cutoff, colour = "black", linetype="dotted")
+
+# print the plot 
+print(p2)
+```
+
+**Save the results to .csv files**
+```{r}
+# save volcano plot
+pdf(file = "bfrag_alone_volcano_220603.pdf", width = 11, height = 8.5)
+plot(p2)
+dev.off()
+
+# subset @ 5% adjusted pval sig. level 
+res_order_FDR_05 <- res_ord[res_ord$padj<0.05,]
+nrow(res_order_FDR_05)
+
+# write both to csv files
+write.csv(as.data.frame(res_ord), file= "bfrag_alone_DE_results_220603.csv")
+write.csv(as.data.frame(res_order_FDR_05), file="bfrag_alone_DE_results.FDR.0.05_220603.csv")
+```
+
+### Other visualizations - MA plots
+
+MA plots are also useful ways to visualize results from a DE analysis of RNA-seq data. These involve plotting the log2 fold-change (the so called M-value, representing the *M* in *MA-plot*) against the average expression level of a gene (the *A* in *MA-plot*). 
+
+The MA-plot allows us to inspect the **full range of expression values over which we detected significant DEGs, and what the magnitude of these fold-changes is**. In a typical experiment, we expect to see DEGs across most of the range of expression values. To help identify genes that were significantly DE, any gene with an adjusted P-value of < 0.05 (or whatever threshold is set) is colored in red. 
+```{r}
+plotMA(res_ord, ylim=c(-6,6), main = "Raw Log2 Fold change")
+```
+
+The **log2 fold-change** plotted above is the raw LFC value estimated by the negative binomial GLM that we used in modeling. However, as discussed above, the individual estimates of variance or dispersion for a single gene are often unreliable, and this holds true `log2 fold change` also. 
+
+**To obtain more useful LFC estimates,** `DESeq2` performs a statistical procedure that involves **shrinking the raw fold change estimates toward zero** for genes that are less likely to contain reliable or highly important information. 
+
+This is done in a very similar way to the shrinkage using empirical bayes that we discussed for the **dispersion estimates**. 
+
+**For shrinking LFC values, LFCs are penalized for properties such as: **  
+- low count values   
+- high dispersion (& thus reduced confidence in expression levels)  
+
+DESeq2 provides a function `lfcShrink()` that must be implemented separately of the standard workflow implemented using `DESeq2()`. 
+```{r}
+# calculate shrunken fold change estimate
+res_shrink <- lfcShrink(dds, 
+                    coef=paste0(resultsNames(dds)[which(resultsNames(dds)=="condition_tet_pos_vs_tet_minus")]), 
+                    type="apeglm")
+```
+
+After performing the shrinkage procedure, we compare the raw and shrunken LFCs to assess the impact of shrinkage. 
+
+**Raw estimates of log2 FC:**
+```{r fig.align="center"}
+plotMA(res_ord, ylim=c(-6,6), main = "Raw Log2 Fold change")
+```
+
+**Shrunken estimates of log2 FC:**
+```{r fig.align="center"}
+plotMA(res_shrink, ylim=c(-6,6), main = "Shrunken Log2 Fold change")
+```
+
+
+We can see that **significantly DE genes are detected across the full range of expression values** (x-axis), which is a good sign that our differential expression modeling has worked well. We can also see that we have a handful of genes with larger expression values (> LFC 2) which potentially represent the most important individual genes, while the majority of our DEGs have a LFC < 1.5 (ish). 
+
+Comparing to the raw LFCs, we can also see that the **majority of genes with lower expression values have have their LFCs shrunk toward zero**. This is important as genes with low counts may simply end up with a large LFC since this is easy to do at small count values, but these are unlikely to be accurate fold-changes, so we don't want to prioritize their importance by giving them a large LFC. 
+
+It's always good to look at the shrunken estimates, to confirm that you don't have a lot of DEGs at very small count values. If you do, you may want to look at the expression levels for those genes to investigate these findings in more detail. 
+
+**As the mean or counts increase, it is evident that the level of shrinkage is less**, although may still be high for genes with greater dispersion estimates. As we move toward the more highly expressed genes, you can see how more genes at lower fold change values are able to be identified as significant, which is due to the fact that there is more information available for these genes, so we can be more confident during hypothesis testing of these genes. 
+
+**Note:** This shrinkage does not really change the hypothesis testing, therefore is performed independently, as is for use in prioritizing your results further for visual inspection or some sort of functional analysis (e.g. pathway analysis). 
+
+ 
+#### Hierachical clustering on the DEGs
+
+A final visualization that is useful to generate is a heatmap based on unsupervised hierachical clustering of the DEGs identified. We can do this by limiting the matrix of rlog values to only those for the DEGs, and then performing the clustering specifically on these data. 
+```{r fig.align="center"}
+rld <- rlog(dds, blind = FALSE)
+ind_to_keep <- c(which(colData(rld)$condition=="tet_minus"), which(colData(rld)$condition=="tet_pos"))
+
+# set up gene expression matrix 
+mat1 <- assay(rld)[rownames(res_order_FDR_05), ind_to_keep]
+
+# scale matrix by each col. values 
+mat_scaled = t(apply(mat1, 1, scale))
+
+# set up colors for heatmap 
+col = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+cols1 <- brewer.pal(11, "Paired")
+cols2 <- brewer.pal(9, "Greens")
+
+# subset coldata for samples in each group
+colData_sub <- colData(dds)[ind_to_keep, ]
+
+# set up annotation bar for samples 
+ha1 = HeatmapAnnotation(Group = colData_sub$condition, 
+                        col = list(Group = c("tet_minus" = cols1[1],
+                                             "tet_pos" = cols1[2])), 
+                                   show_legend = TRUE)
+
+# set up column annotation labels (samples)
+ha = columnAnnotation(x = anno_text(colData_sub$condition, 
+                                    which="column", rot = 45, 
+                                    gp = gpar(fontsize = 10)))
+
+# generate heatmap object 
+ht1 = Heatmap(mat_scaled, name = "Expression", col = col, 
+              top_annotation = c(ha1), 
+              bottom_annotation = c(ha),
+              show_row_names = FALSE)
+
+# plot the heatmap 
+draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)")
+
+# save plot
+pdf(file = "bfrag_alone_heatmap.pdf", width = 11, height = 8.5)
+draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)")
+dev.off()
+
+```
+
+***
+
+## Comparing Tet- and Mixed Samples to One Another:
+The next comparison I wanted to make was using the Tet- samples and comparing them to the co-cultured samples when aligned to *B. fragilis*. I would have compared the *B. ovatus* samples, but couldn't due to only having one replicate in the tet- condition. As the rationale behind the code in the first comparison is written above, I will just include the code and fewer comments as it is very similar.
+
+### Read in raw count data 
+```{r}
+# read in the matrix we generated using htseq-count 
+cts <- as.matrix(read.table("Counts/bfrag_mixed_all_counts.txt", 
+                            sep = "\t", 
+                            header = TRUE, 
+                            row.names=1, 
+                            stringsAsFactors = F))
+
+# filter out these last 5 rows 
+cts <- cts[1:(nrow(cts)-5),]
+
+# Take a quick look
+head(cts)
+tail(cts)
+```
+
+### Read in sample metadata
+```{r}
+# read in the file from the metadata that has sample/experimental labels
+colData <- read.csv("Metadata/bfrag_combined_vs_alone_metadata.csv", row.names=1)
+head(colData)
+
+# order by bacteroides_type
+colData <- colData[order(colData$bacteroides_type),]
+
+# quick look 
+head(colData)
+```
+
+```{r}
+# now make this a factor as it will be the variable used to define groups for the differential expression analysis 
+colData$condition
+
+colData$condition <- factor(colData$condition, levels=c("tet_minus", "BF_excess", "BO_excess"))
+```
+
+### Construct the *DESeq2* data set & explore the characteristics of the data
+Create the `DESeqDataSet` object. 
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = colData,
+                              design = ~ condition)
+
+# have a quick look at the object 
+dds
+
+# print structure 
+str(dds)
+
+# several accessor functions exist to access specific data 'slots'
+head(counts(dds))
+head(colData(dds))
+
+# specific slots can also be accessed using the '@'
+dds@colData
+
+# drop genes with low counts 
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+dim(dds)
+```
+
+Save the DESeq object at this point (so that we don't have to do the above everytime we want to work with our data). 
+
+```{r}
+save(dds, file = "bfrag_tet-_vs_mixed_DESeq2.rdata")
+```
+
+### Normalization of raw counts 
+```{r}
+dds <- estimateSizeFactors(dds)
+
+sizeFactors(dds)
+hist(sizeFactors(dds), 
+     breaks=6, col = "cornflowerblue",
+     xlab="Size factors", ylab="No. of samples", 
+     main= "Size factor distribution over samples")
+
+counts_norm <- counts(dds, normalized=TRUE)
+head(counts_norm)
+```
+
+Comparing the normalized to the raw counts, it's clear they are different. 
+
+```{r}
+head(counts(dds, normalized=FALSE))
+```
+
+We can use this table of normalized read counts to compare values for individual genes across samples and check a few genes as a sanity check. I chose *gyrB* as an essential gene.
+
+```{r}
+# make a function to generate a quick plot of the normalized counts
+gene_plot <- function(BF9343, gene_symbol){
+  # save the normalized counts in a dataframe 
+  cnts <- counts(dds, normalized=TRUE)
+  colnames(cnts) <- colData(dds)$condition
+  # extract the counts for specified ENSG ID and add sample group data 
+  df1 <- data.frame(log2(cnts[BF9343,]), colData(dds)$condition)
+  colnames(df1) <- c(paste0("log2_gene"), "condition")
+  # use ggplot2 to make a plot of counts vs sample group 
+  p1<- ggplot(df1, aes(condition, log2_gene)) + 
+    geom_jitter(aes(color = condition)) + 
+    ggtitle(paste0(gene_symbol), " - Log2 Normalized counts")
+  # print the plot 
+  print(p1)
+}
+
+# now apply the function to print a plot for a specified gene 
+gene_plot(BF9343 = "BF9343_0242", gene_symbol = "gyrB")
+```
+Based on this plot, we can still see that one tet- sample being lower than the others, however it looks like there is also a BF_excess replicate that is positioned farther than the others and the BO_excess replicates are also somewhat distanced from one another.
+
+### Exploratory Data Analysis & QC
+#### PCA Plots
+
+```{r}
+rld <- rlog(dds, blind = FALSE)
+head(assay(rld))
+
+par(mfrow=c(1,2))
+plot(log2(cts[,1]+1), log2(cts[,2]+1), col = "cornflowerblue", xlab = "Sample 1", ylab = "Sample 2", main = "Log2 + 1")
+plot(assay(rld)[,1], assay(rld)[,2], col = "indianred", xlab = "Sample 1", ylab = "Sample 2", main = "rlog")
+
+# calculate gene expression level variance between samples 
+var <- rev(rowVars(assay(rld))[order(rowVars(assay(rld)))])
+
+# plot variance for genes accross samples
+plot(var, las = 1, main="Sample gene expression variance", xlab = "Gene", ylab = "Variance")
+abline(v=1000, col="red") ; abline(v=500, col="green") ; abline(v=250, col="blue")
+```
+
+At around 500 genes the variance starts to spike upwards, so this is the number of variable features (genes) to use. Therefore I'll restrict the dataset to 500 genes for purposes of the PCA. Now lets extract and visualize the variance explained by each PC to determine which are most informative.
+
+```{r}
+# modify variable feature number to be used in PCA and hierarchical clustering based on no. of most variable features 
+var_feature_n <- 500 
+
+# perform PCA and order by variance 
+rv <- rowVars(assay(rld))
+select <- order(rv, decreasing = TRUE)[seq_len(min(var_feature_n, length(rv)))]
+pca <- prcomp(t(assay(rld)[select, ]))
+
+# extract the varioance explained by each PC 
+percentVar <- pca$sdev^2/sum(pca$sdev^2)
+names(percentVar)[1:5] <- c("PC1", "PC2", "PC3", "PC4", "PC5")
+percentVar <- percentVar[1:5]
+
+# plot variance for top 10 PCs 
+barplot(percentVar[1:5], col = "indianred", las = 1, ylab = "% Variance", cex.lab = 1.2)
+```
+
+We can see that the majority of variance is explained by the first few PCs, therefore generate a PCA plot for PC1 vs PC2.
+```{r}
+# construct data frame w/ PC loadings and add sample labels 
+pca_df <- as.data.frame(pca$x)
+pca_df$condition <- dds@colData$condition
+pca_df$sample_ids <- colnames(dds)
+
+# add colors for plotting to df 
+pca_df$col <- NA
+for(i in 1:length(levels(pca_df$condition))){
+  ind1 <- which(pca_df$condition == levels(pca_df$condition)[i])
+  pca_df$col[ind1] <- i
+}
+
+# plot PC1 vs PC2
+plot(pca_df[, 1], pca_df[, 2], 
+     xlab = paste0("PC1 (", (round(percentVar[1], digits=3)*100), "% variance)"), 
+     ylab = paste0("PC2 (", (round(percentVar[2], digits=3)*100), "% variance)"),
+     main=paste0("PC1 vs PC2 for ", var_feature_n, " most variable genes"),
+     pch=16, cex=1.35, cex.lab=1.3, cex.axis = 1.15, las=1, 
+     panel.first = grid(),
+     col=pca_df$col)
+text((pca_df[, 2])~(pca_df[, 1]), labels = pca_df$condition, cex=0.6, font=2, pos=4)
+```
+
+We can see BO_excess clustering farther from the other samples, which makes sense since *B. fragilis* is in the minority population here. What's interesting is that BF_excess does not seem to cluster much further away from the tet- samples, implying that co-culturing samples alone does not make much of a difference in expression for which ever population is significantly greater. 
+
+#### Hierarchial Clustering
+```{r}
+# select top X no. of variable genes 
+topVarGenes <- head(order(rowVars(assay(rld)), decreasing=TRUE),
+                    var_feature_n)
+
+# set up gene expression matrix 
+mat1 <- assay(rld)[topVarGenes,]
+
+# scale matrix by each col. values 
+mat_scaled = t(apply(mat1, 1, scale))
+
+# set up colors for heatmap 
+col = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+cols1 <- brewer.pal(11, "Paired")
+cols2 <- brewer.pal(9, "Greens")
+
+# set up annotation bar for samples 
+ha1 = HeatmapAnnotation(Group = colData(dds)$condition, 
+                        col = list(Group = c("tet_minus" = cols1[1], 
+                                             "BF_excess" = cols2[2],
+                                             "BO_excess" = cols2[4])), 
+                                   show_legend = TRUE)
+
+# set up column annotation labels (samples)
+ha = columnAnnotation(x = anno_text(colData(dds)$condition, 
+                                    which="column", rot = 45, 
+                                    gp = gpar(fontsize = 10)))
+
+# generate heatmap object 
+ht1 = Heatmap(mat_scaled, 
+              name = "Expression", 
+              col = col, 
+              top_annotation = c(ha1), 
+              bottom_annotation = c(ha),
+              show_row_names = FALSE)
+
+# plot the heatmap 
+draw(ht1, row_title = "Genes", column_title = "Top 500 most variable genes")
+```
+
+As we saw in the PCA, the tet_minus and the BF_excess co-cultured samples do not form any clear clusters from one another. We may want to remove BF_excess and perform the clustering again so that we can compare the single culture and BO_excess samples more easily. The comparison between Tet- and BO_excess is probably more interesting from this perspective too, as *B. fragilis* is in the minority population.
+
+```{r}
+ind_to_keep <- c(which(colData(rld)$condition=="tet_minus"), which(colData(rld)$condition=="BO_excess"))
+topVarGenes <- head(order(rowVars(assay(rld)[,ind_to_keep]), decreasing=TRUE), var_feature_n)
+
+# set up gene expression matrix 
+mat1 <- assay(rld)[topVarGenes, ind_to_keep]
+
+# scale matrix by each col. values 
+mat_scaled = t(apply(mat1, 1, scale))
+
+# set up colors for heatmap 
+col = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+cols1 <- brewer.pal(11, "Paired")
+cols2 <- brewer.pal(9, "Greens")
+
+# subset coldata for samples in untx and ex groups
+colData_sub <- colData(dds)[ind_to_keep, ]
+
+# set up annotation bar for samples 
+ha1 = HeatmapAnnotation(Group = colData_sub$condition, 
+                        col = list(Group = c("tet_minus" = cols1[1], 
+                                             "BO_excess" = cols1[2])), 
+                                   show_legend = TRUE)
+
+# set up column annotation labels (samples)
+ha = columnAnnotation(x = anno_text(colData_sub$condition, 
+                                    which="column", rot = 45, 
+                                    gp = gpar(fontsize = 10)))
+
+# generate heatmap object 
+ht1 = Heatmap(mat_scaled, name = "Expression", col = col, 
+              top_annotation = c(ha1), 
+              bottom_annotation = c(ha),
+              show_row_names = FALSE)
+
+# plot the heatmap 
+draw(ht1, row_title = "Genes", column_title = "Top 500 most variable genes")
+```
+
+So while we did remove BF_excess, it looks like the replicates for tet- and BO_excess aren't clearly clustered, but perhaps having more replicates would give us more insight into which direction our co-cultured samples are leaning.
+
+### Apply DESeq2 procedure to the data
+```{r}
+# run the DEseq2 analysis 
+dds <- DESeq(dds)
+
+# look at distribution of raw counts
+hist(counts(dds, normalized=FALSE)[,5], breaks = 500, col="blue",
+     xlab="Raw expression counts", ylab="Number of genes",
+     main = "Count distribution for sample X")
+
+head(counts(dds, normalized=FALSE))
+
+# calculate mean and varaince for group of replicates
+mean_counts <- apply(counts(dds, normalized=FALSE)[,1:3], 1, mean)
+variance_counts <- apply(counts(dds, normalized=FALSE)[,1:3], 1, var)
+
+# plot the mean variance trend 
+plot(log10(mean_counts), log10(variance_counts), 
+     ylim=c(0,9), xlim=c(0,9), 
+     ylab = "log10 (variance)", xlab = "log10 (mean counts)", 
+     main = "Mean-variance trend", las = 1)
+
+# add line for x=y
+abline(0,1,lwd=2,col="red")
+```
+
+We can plot a few different negative binomial distributions to examine how the dispersion parameter affects the spread of the data.
+
+```{r}
+# generate a random variable using the negative binomial distribution
+### dispersion = 10
+par(mfrow=c(3,1))
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.001), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.001")
+### dispersion = 10
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.01), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.01")
+### dispersion = 10
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.1), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.1")
+```
+
+It is clear that as the dispersion increases, the variation around the mean also increases.
+
+Plotting dispersion estimates for our data:
+```{r fig.align="center"}
+plotDispEsts(dds)
+```
+
+Once again, while the distribution of the estimates are around the fitted line, the dispersion doesn't really decrease a ton as the mean increases, which may or may not be a direct concern. I think an increase in dispersion would definitely be of the most concern, but I'm not sure what to make of this structure.
+
+### Differential expression analysis - Hypothesis testing
+
+```{r fig.align="center"}
+# quickly check the available coefficients we could extract, also confirms which condition is the baseline (tet_minus)
+resultsNames(dds)
+# get results for DEG analysis (and order by Pval) by specifying design 
+res <- results(dds, 
+  name = "condition_BO_excess_vs_tet_minus", 
+  alpha = 0.05, 
+  lfcThreshold = 0)
+res
+```
+```{r}
+res <- results(dds, alpha = 0.05, 
+  contrast = c("condition", "BO_excess", "tet_minus"), 
+  lfcThreshold = 0)
+res
+```
+
+Lets have a quick look at the results and how many genes were statistically significant at an adjusted P-value threshold of 0.05.
+```{r}
+# order by adj Pval 
+res_ord <- res[order(res$padj),] 
+res_ord
+# quick check for how many DEGs with significance @ 5% level in either FC direction 
+sum(res$padj < 0.05, na.rm=TRUE)
+sum(res$padj < 0.05 & res$log2FoldChange > 2, na.rm=TRUE)
+sum(res$padj < 0.05 & res$log2FoldChange < -2, na.rm=TRUE)
+
+# or to get both padj < 0.05 and log2FoldChange > 2 or < -2
+sum(res$padj < 0.05 & res$log2FoldChange > 2| res$padj < 0.05 & res$log2FoldChange< -2, na.rm=TRUE)
+
+# checking for the number of nas
+table(is.na(res$padj))
+
+# plotting the number of rejections 
+plot(metadata(res_ord)$filterNumRej, 
+     type="b", ylab="number of rejections",
+     xlab="quantiles of filter (mean norm. counts)")
+lines(metadata(res_ord)$lo.fit, col="red")
+abline(v=metadata(res_ord)$filterTheta)
+
+# removing the nas
+res_ord <- res_ord[!is.na(res_ord$padj),]
+```
+
+**### Add gene annotation to the results** Come back to this in the future
+
+### Visualization of Differential Expression 
+#### Volcano plot
+
+```{r, message=FALSE, fig.align="center"}
+plot(res$log2FoldChange, -log10(res$pvalue), 
+     main = "Volcano plot", 
+     las = 1, col = "indianred",
+     ylab = "- log10 P-value", xlab = "log2 Fold change")
+
+# add horizontal lines to help guide interpretation
+abline(h=-log10(0.05/nrow(res)), lty = 2, col = "black") # Bonferonni 
+abline(h=-log10(0.05), lty = 2, col = "black") # nominal P-value 
+
+# save a dataframe from the results() output
+res_tmp <- as.data.frame(res_ord)
+
+# add a column that will be used to save the colors we want to plot 
+res_tmp$cols <- c()
+
+# set the significance cut off (alpha) and fold change threshold to be used for coloring of genes 
+alpha <- 0.05/nrow(res)
+fc_cutoff <- 2
+
+# loop through our dataframe and add values to the color column based on magnitude of alpha and LFCs 
+res_tmp$cols <- NA
+for(i in 1:nrow(res_tmp)){
+    if(is.na(res_tmp$pvalue[i])){
+      res_tmp$cols[i] <- NA
+    }
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i] > fc_cutoff){
+      res_tmp$cols[i] <- "indianred"
+    } 
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i] < -fc_cutoff){
+      res_tmp$cols[i] <- "indianred"
+    } 
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i]>-fc_cutoff & res_tmp$log2FoldChange[i]<fc_cutoff){
+      res_tmp$cols[i] <- "cornflowerblue"
+    } 
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] > fc_cutoff){
+      res_tmp$cols[i] <- "gray47" 
+    }
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] < -fc_cutoff){
+      res_tmp$cols[i] <- "gray47" 
+    }
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] < fc_cutoff){
+      res_tmp$cols[i] <- "gray10" 
+    }
+}
+  
+
+res_tmp$gene <- rownames(res_tmp)
+# generate the splot 
+p = ggplot(res_tmp, aes(log2FoldChange, -log10(pvalue))) + 
+    geom_point(aes(col=col), alpha = 0.5, size =2.5, colour = res_tmp$cols, fill = res_tmp$cols)  + 
+    xlab("Log2 fold change") + ylab("-log10 Q-value") +
+    ylim(0, 55) + 
+    xlim(-5, 11) +
+    geom_hline(yintercept = -log10(alpha), color = "black", linetype = "dashed", size = 0.4) + 
+    theme(legend.key = element_blank()) + 
+    ggtitle("BO_excess vs Tet-") 
+
+# print the plot 
+print(p)
+```
+So there are a few genes here that are crazy high on the p-value axis or far out on both axes that I wanted to make sure to include.
+
+Adding some labels for potentially interesting genes using the **ggrepel** package. 
+```{r fig.align="center"}
+library(ggrepel)
+p2 <- p + 
+  # add labels to genes w/ LFC > 2 and above alpha threshold
+  geom_label_repel(data = subset(res_tmp, log2FoldChange > 2 & pvalue < alpha), aes(label = gene), 
+                     box.padding   = 0.35,
+                     nudge_x = 0.1,
+                     nudge_y = 0.1,
+                     point.padding = 1,
+                     label.size = 0.1,
+                     segment.size = 0.3,
+                     segment.color = 'grey50', size = 3) +
+  # add labels to genes w/ LFC < -2 and above alpha threshold
+  geom_label_repel(data = subset(res_tmp, log2FoldChange < -2 & pvalue < alpha), aes(label = gene), 
+                     box.padding   = 0.35,
+                     nudge_x = -0.1,
+                     nudge_y = 0.1,
+                     point.padding = 1,
+                     label.size = 0.1,
+                     segment.size = 0.3,
+                     segment.color = 'grey50', size = 3) +
+  # add vertical fold change lines 
+  geom_vline(xintercept = fc_cutoff, colour = "black", linetype="dotted") + 
+  geom_vline(xintercept = -fc_cutoff, colour = "black", linetype="dotted")
+
+# print the plot 
+print(p2)
+```
+
+**Save the results to .csv files**
+```{r}
+# save volcano
+pdf(file = "bfrag_tet-_vs_mixed_volcano.pdf", width = 15, height = 9)
+plot(p2)
+dev.off()
+
+# subset @ 5% adjusted pval sig. level 
+res_order_FDR_05 <- res_ord[res_ord$padj<0.05,]
+nrow(res_order_FDR_05)
+
+# write both to csv files
+write.csv(as.data.frame(res_ord), file= "bfrag_tet-_vs_mixed_DE_results.csv")
+write.csv(as.data.frame(res_order_FDR_05), file="bfrag_tet-_vs_mixed_DE_results.FDR.0.05.csv")
+```
+
+### Other visualizations - MA plots
+To help identify genes that were significantly DE, any gene with an adjusted P-value of < 0.05 (or whatever threshold is set) is colored in red. 
+```{r}
+plotMA(res_ord, ylim=c(-6,6), main = "Raw Log2 Fold change")
+
+# calculate shrunken fold change estimate
+res_shrink <- lfcShrink(dds, 
+                    coef=paste0(resultsNames(dds)[which(resultsNames(dds)=="condition_BO_excess_vs_tet_minus")]), 
+                    type="apeglm")
+```
+
+After performing the shrinkage procedure, we compare the raw and shrunken LFCs to assess the impact of shrinkage. 
+
+**Raw estimates of log2 FC:**
+```{r fig.align="center"}
+plotMA(res_ord, ylim=c(-6,6), main = "Raw Log2 Fold change")
+```
+
+**Shrunken estimates of log2 FC:**
+```{r fig.align="center"}
+plotMA(res_shrink, ylim=c(-6,6), main = "Shrunken Log2 Fold change")
+```
+
+
+#### Hierachical clustering on the DEGs
+
+```{r fig.align="center"}
+rld <- rlog(dds, blind = FALSE)
+ind_to_keep <- c(which(colData(rld)$condition=="tet_minus"), which(colData(rld)$condition=="BO_excess"))
+
+# set up gene expression matrix 
+mat1 <- assay(rld)[rownames(res_order_FDR_05), ind_to_keep]
+
+# scale matrix by each col. values 
+mat_scaled = t(apply(mat1, 1, scale))
+
+# set up colors for heatmap 
+col = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+cols1 <- brewer.pal(11, "Paired")
+cols2 <- brewer.pal(9, "Greens")
+
+# subset coldata for samples in each group
+colData_sub <- colData(dds)[ind_to_keep, ]
+
+# set up annotation bar for samples 
+ha1 = HeatmapAnnotation(Group = colData_sub$condition, 
+                        col = list(Group = c("tet_minus" = cols1[1],
+                                             "BO_excess" = cols1[2])), 
+                                   show_legend = TRUE)
+
+# set up column annotation labels (samples)
+ha = columnAnnotation(x = anno_text(colData_sub$condition, 
+                                    which="column", rot = 45, 
+                                    gp = gpar(fontsize = 10)))
+
+# generate heatmap object 
+ht1 = Heatmap(mat_scaled, name = "Expression", col = col, 
+              top_annotation = c(ha1), 
+              bottom_annotation = c(ha),
+              show_row_names = FALSE)
+
+# plot the heatmap 
+draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)")
+
+# save to pdf
+pdf(file = "bfrag_tet-_vs_mixed_heatmap.pdf", width = 11, height = 8.5)
+draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)")
+dev.off()
+```
+
+***
+
+## Comparing Mixed Samples to One Another Aligned to *B. fragilis*:
+
+The third comparision I wanted to make was comparing the co-cultured samples to one another to see which genes are affected when *B. fragilis* is in the minority population.
+
+### Read in raw count data 
+```{r}
+# read in the matrix we generated using htseq-count 
+cts <- as.matrix(read.table("Counts/bfrag_s5-6_all_counts.txt", 
+                            sep = "\t", 
+                            header = TRUE, 
+                            row.names=1, 
+                            stringsAsFactors = F))
+
+# filter out these last 5 rows 
+cts <- cts[1:(nrow(cts)-5),]
+
+# Take a quick look
+head(cts)
+tail(cts)
+```
+
+### Read in sample metadata
+```{r}
+# read in the file from the SRA metadata that has sample/experimental labels 
+colData <- read.csv("Metadata/bfrag_s5-6_metadata.csv", row.names=1)
+head(colData)
+
+# order by SRA run accession 
+colData <- colData[order(colData$bacteroides_type),]
+
+# quick look 
+head(colData)
+
+# now make this a factor as it will be the variable used to define groups for the differential expression analysis 
+colData$condition
+
+# making sure BF_excess is considered the baseline expression because we care more about the changes when B. fragilis is in the minority
+colData$condition <- factor(colData$condition, levels=c("BF_excess", "BO_excess"))
+```
+
+### Construct the *DESeq2* data set & explore the characteristics of the data
+Create the `DESeqDataSet` object. 
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = colData,
+                              design = ~ condition)
+```
+
+Looking at DESeq2 class object a bit to get to familar with its contents. 
+
+```{r}
+# have a quick look at the object 
+dds
+
+# print structure 
+str(dds)
+
+# several accessor functions exist to access specific data 'slots'
+head(counts(dds))
+head(colData(dds))
+
+# specific slots can also be accessed using the '@'
+dds@colData
+```
+
+Drop genes that have less than 10 reads across all samples
+
+```{r}
+# drop genes with low counts 
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+dim(dds)
+```
+
+Save the DESeq object
+```{r}
+save(dds, file = "bfrag_s5-6_DESeq2.rdata")
+```
+
+### Normalization of raw counts 
+```{r}
+dds <- estimateSizeFactors(dds)
+
+# distribution of size factors
+sizeFactors(dds)
+hist(sizeFactors(dds), 
+     breaks=6, col = "cornflowerblue",
+     xlab="Size factors", ylab="No. of samples", 
+     main= "Size factor distribution over samples")
+
+# return the matrix of counts where each column has been divided by size factors
+counts_norm <- counts(dds, normalized=TRUE)
+head(counts_norm)
+```
+
+Comparing the normalized to the raw counts, we can clearly see that they are different. 
+
+```{r}
+head(counts(dds, normalized=FALSE))
+
+# lets make a function to generate a quick plot of the normalized counts 
+gene_plot <- function(BF9343, gene_symbol){
+  # save the normalized counts in a dataframe 
+  cnts <- counts(dds, normalized=TRUE)
+  colnames(cnts) <- colData(dds)$condition
+  # extract the counts for specified BF9343 ID and add sample group data
+  df1 <- data.frame(log2(cnts[BF9343,]), colData(dds)$condition)
+  colnames(df1) <- c(paste0("log2_gene"), "condition")
+  # use ggplot2 to make a plot of counts vs sample group 
+  p1<- ggplot(df1, aes(condition, log2_gene)) + 
+    geom_jitter(aes(color = condition)) + 
+    ggtitle(paste0(gene_symbol), " - Log2 Normalized counts")
+  # print the plot 
+  print(p1)
+}
+
+# now apply the function to print a plot for a specified gene 
+gene_plot(BF9343 = "BF9343_0242", gene_symbol = "gyrB")
+```
+As we saw in previous data, one replicate from each group seems to have a lower log2 value than the other replicates.
+
+### Exploratory Data Analysis & QC
+#### PCA Plots
+
+```{r}
+rld <- rlog(dds, blind = FALSE)
+head(assay(rld))
+
+par(mfrow=c(1,2))
+plot(log2(cts[,1]+1), log2(cts[,2]+1), col = "cornflowerblue", xlab = "Sample 1", ylab = "Sample 2", main = "Log2 + 1")
+plot(assay(rld)[,1], assay(rld)[,2], col = "indianred", xlab = "Sample 1", ylab = "Sample 2", main = "rlog")
+
+# calculate gene expression level variance between samples 
+var <- rev(rowVars(assay(rld))[order(rowVars(assay(rld)))])
+
+# plot variance for genes accross samples
+plot(var, las = 1, main="Sample gene expression variance", xlab = "Gene", ylab = "Variance")
+abline(v=1000, col="red") ; abline(v=500, col="green") ; abline(v=250, col="blue")
+```
+
+At around 500 genes the variance starts to spike upwards, so this is the number of variable features (genes) to use for PCA
+
+```{r}
+# modify variable feature number to be used in PCA and hierarchical clustering based on no. of most variable features 
+var_feature_n <- 500 
+
+# perform PCA and order by variance 
+rv <- rowVars(assay(rld))
+select <- order(rv, decreasing = TRUE)[seq_len(min(var_feature_n, length(rv)))]
+pca <- prcomp(t(assay(rld)[select, ]))
+
+# extract the varioance explained by each PC 
+percentVar <- pca$sdev^2/sum(pca$sdev^2)
+names(percentVar)[1:5] <- c("PC1", "PC2", "PC3", "PC4", "PC5")
+percentVar <- percentVar[1:5]
+
+# plot variance for top 10 PCs 
+barplot(percentVar[1:5], col = "indianred", las = 1, ylab = "% Variance", cex.lab = 1.2)
+```
+
+We can see that the majority of variance is explained by the first few PCs, therefore we'll generate a PCA plot for PC1 vs PC2.
+
+```{r}
+# construct data frame w/ PC loadings and add sample labels 
+pca_df <- as.data.frame(pca$x)
+pca_df$condition <- dds@colData$condition
+pca_df$sample_ids <- colnames(dds)
+
+# add colors for plotting to df 
+pca_df$col <- NA
+for(i in 1:length(levels(pca_df$condition))){
+  ind1 <- which(pca_df$condition == levels(pca_df$condition)[i])
+  pca_df$col[ind1] <- i
+}
+
+# plot PC1 vs PC2
+plot(pca_df[, 1], pca_df[, 2], 
+     xlab = paste0("PC1 (", (round(percentVar[1], digits=3)*100), "% variance)"), 
+     ylab = paste0("PC2 (", (round(percentVar[2], digits=3)*100), "% variance)"),
+     main=paste0("PC1 vs PC2 for ", var_feature_n, " most variable genes"),
+     pch=16, cex=1.35, cex.lab=1.3, cex.axis = 1.15, las=1, 
+     panel.first = grid(),
+     col=pca_df$col)
+text((pca_df[, 2])~(pca_df[, 1]), labels = pca_df$condition, cex=0.6, font=2, pos=4)
+```
+
+As we can see both groups cluster far apart which is encouraging.
+
+#### Hierarchial Clustering
+
+```{r}
+# select top X no. of variable genes 
+topVarGenes <- head(order(rowVars(assay(rld)), decreasing=TRUE),
+                    var_feature_n)
+
+# set up gene expression matrix 
+mat1 <- assay(rld)[topVarGenes,]
+
+# scale matrix by each col. values 
+mat_scaled = t(apply(mat1, 1, scale))
+
+# set up colors for heatmap 
+col = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+cols1 <- brewer.pal(11, "Paired")
+cols2 <- brewer.pal(9, "Greens")
+
+# set up annotation bar for samples 
+ha1 = HeatmapAnnotation(Group = colData(dds)$condition, 
+                        col = list(Group = c("BF_excess" = cols1[1], 
+                                             "BO_excess" = cols1[2])), 
+                                   show_legend = TRUE)
+
+# se up column annotation labels (samples)
+ha = columnAnnotation(x = anno_text(colData(dds)$condition, 
+                                    which="column", rot = 45, 
+                                    gp = gpar(fontsize = 10)))
+
+# generate heatmap object 
+ht1 = Heatmap(mat_scaled, 
+              name = "Expression", 
+              col = col, 
+              top_annotation = c(ha1), 
+              bottom_annotation = c(ha),
+              show_row_names = FALSE)
+
+# plot the heatmap 
+draw(ht1, row_title = "Genes", column_title = "Top 500 most variable genes")
+```
+
+Similar to the last comparison, the two groups don't seem to cluster super well, with chunks of genes not being expressed in similar ways for each condition.
+
+### Apply DESeq2 procedure to the data
+```{r}
+# run the DEseq2 analysis 
+dds <- DESeq(dds)
+
+# looking at distribution of raw counts
+hist(counts(dds, normalized=FALSE)[,5], breaks = 500, col="blue",
+     xlab="Raw expression counts", ylab="Number of genes",
+     main = "Count distribution for sample X")
+```
+
+```{r}
+head(counts(dds, normalized=FALSE))
+
+# calculate mean and varaince for group of replicates
+mean_counts <- apply(counts(dds, normalized=FALSE)[,1:3], 1, mean)
+variance_counts <- apply(counts(dds, normalized=FALSE)[,1:3], 1, var)
+
+# plot the mean variance trend 
+plot(log10(mean_counts), log10(variance_counts), 
+     ylim=c(0,9), xlim=c(0,9), 
+     ylab = "log10 (variance)", xlab = "log10 (mean counts)", 
+     main = "Mean-variance trend", las = 1)
+
+# add line for x=y
+abline(0,1,lwd=2,col="red")
+
+# generate a random variable using the negative binomial distribution
+### dispersion = 10
+par(mfrow=c(3,1))
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.001), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.001")
+### dispersion = 10
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.01), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.01")
+### dispersion = 10
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.1), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.1")
+```
+
+It is clear that as the dispersion increases, the variation around the mean also increases.
+
+Plotting the dispersion estimates:
+```{r fig.align="center"}
+plotDispEsts(dds)
+```
+
+Pretty large concern here for me where there is a dip and then an increase of dispersion as the mean increases. I think the data should therefore be taken with a grain of salt.
+
+### Differential expression analysis - Hypothesis testing
+
+```{r fig.align="center"}
+# quickly check the available coefficients we could extract 
+resultsNames(dds)
+# get results for DEG analysis (and order by Pval) by specifying design 
+res <- results(dds, 
+  name = "condition_BO_excess_vs_BF_excess", 
+  alpha = 0.05, 
+  lfcThreshold = 0)
+res
+```
+```{r}
+res <- results(dds, alpha = 0.05, 
+  contrast = c("condition", "BO_excess", "BF_excess"), 
+  lfcThreshold = 0)
+res
+```
+
+Lets have a quick look at the results and how many genes were statistically significant at an adjusted P-value threshold of 0.05.
+
+```{r}
+# order by adj Pval 
+res_ord <- res[order(res$padj),] 
+res_ord
+# quick check for how many DEGs with significance @ 5% level in either FC direction 
+sum(res$padj < 0.05, na.rm=TRUE)
+sum(res$padj < 0.05 & res$log2FoldChange > 2, na.rm=TRUE)
+sum(res$padj < 0.05 & res$log2FoldChange < -2, na.rm=TRUE)
+
+# or to get both padj < 0.05 and log2FoldChange > 2 or < -2
+sum(res$padj < 0.05 & res$log2FoldChange > 2| res$padj < 0.05 & res$log2FoldChange< -2, na.rm=TRUE)
+
+# checking for number of nas
+table(is.na(res$padj))
+
+# plotting number of rejections
+plot(metadata(res_ord)$filterNumRej, 
+     type="b", ylab="number of rejections",
+     xlab="quantiles of filter (mean norm. counts)")
+lines(metadata(res_ord)$lo.fit, col="red")
+abline(v=metadata(res_ord)$filterTheta)
+# filtering nas
+res_ord <- res_ord[!is.na(res_ord$padj),]
+```
+
+### **Add gene annotation to the results** Come back to this
+
+### Visualization of Differential Expression 
+#### Volcano plot
+
+```{r, message=FALSE, fig.align="center"}
+plot(res$log2FoldChange, -log10(res$pvalue), 
+     main = "Volcano plot", 
+     las = 1, col = "indianred",
+     ylab = "- log10 P-value", xlab = "log2 Fold change")
+
+# add horizontal lines to help guide interpretation
+abline(h=-log10(0.05/nrow(res)), lty = 2, col = "black") # Bonferonni 
+abline(h=-log10(0.05), lty = 2, col = "black") # nominal P-value 
+
+# save a dataframe from the results() output
+res_tmp <- as.data.frame(res_ord)
+
+# add a column that will be used to save the colors we want to plot 
+res_tmp$cols <- c()
+
+# set the significance cut off (alpha) and fold change threshold to be used for coloring of genes 
+alpha <- 0.05/nrow(res)
+fc_cutoff <- 2
+
+# loop through our dataframe and add values to the color column based on magnitude of alpha and LFCs 
+res_tmp$cols <- NA
+for(i in 1:nrow(res_tmp)){
+    if(is.na(res_tmp$pvalue[i])){
+      res_tmp$cols[i] <- NA
+    }
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i] > fc_cutoff){
+      res_tmp$cols[i] <- "indianred"
+    } 
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i] < -fc_cutoff){
+      res_tmp$cols[i] <- "indianred"
+    } 
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i]>-fc_cutoff & res_tmp$log2FoldChange[i]<fc_cutoff){
+      res_tmp$cols[i] <- "cornflowerblue"
+    } 
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] > fc_cutoff){
+      res_tmp$cols[i] <- "gray47" 
+    }
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] < -fc_cutoff){
+      res_tmp$cols[i] <- "gray47" 
+    }
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] < fc_cutoff){
+      res_tmp$cols[i] <- "gray10" 
+    }
+}
+  
+
+res_tmp$gene <- rownames(res_tmp)
+# generate the splot 
+p = ggplot(res_tmp, aes(log2FoldChange, -log10(pvalue))) + 
+    geom_point(aes(col=col), alpha = 0.5, size =2.5, colour = res_tmp$cols, fill = res_tmp$cols)  + 
+    xlab("Log2 fold change") + ylab("-log10 Q-value") +
+    ylim(0, 35) + 
+    xlim(-5, 6) +
+    geom_hline(yintercept = -log10(alpha), color = "black", linetype = "dashed", size = 0.4) + 
+    theme(legend.key = element_blank()) + 
+    ggtitle("BO_excess vs BF_excess: Aligned to B. fragilis") 
+
+# print the plot 
+print(p)
+
+# adding some annotations for potentially interesting genes
+library(ggrepel)
+p2 <- p + 
+  # add labels to genes w/ LFC > 2 and above alpha threshold
+  geom_label_repel(data = subset(res_tmp, log2FoldChange > 2 & pvalue < alpha), aes(label = gene), 
+                     box.padding   = 0.35,
+                     nudge_x = 0.1,
+                     nudge_y = 0.1,
+                     point.padding = 1,
+                     label.size = 0.1,
+                     segment.size = 0.3,
+                     segment.color = 'grey50', size = 3) +
+  # add labels to genes w/ LFC < -2 and above alpha threshold
+  geom_label_repel(data = subset(res_tmp, log2FoldChange < -2 & pvalue < alpha), aes(label = gene), 
+                     box.padding   = 0.35,
+                     nudge_x = -0.1,
+                     nudge_y = 0.1,
+                     point.padding = 1,
+                     label.size = 0.1,
+                     segment.size = 0.3,
+                     segment.color = 'grey50', size = 3) +
+  # add vertical fold change lines 
+  geom_vline(xintercept = fc_cutoff, colour = "black", linetype="dotted") + 
+  geom_vline(xintercept = -fc_cutoff, colour = "black", linetype="dotted")
+
+# print the plot 
+print(p2)
+```
+
+**Save the results to .csv files**
+```{r}
+# save volcano to pdf
+pdf(file = "bfrag_s5-6_volcano.pdf", width = 15, height = 9)
+plot(p2)
+dev.off()
+
+# subset @ 5% adjusted pval sig. level 
+res_order_FDR_05 <- res_ord[res_ord$padj<0.05,]
+nrow(res_order_FDR_05)
+
+# write both to csv files
+write.csv(as.data.frame(res_ord), file= "bfrag_s5-6_DE_results.csv")
+write.csv(as.data.frame(res_order_FDR_05), file="bfrag_s5-6_DE_results.FDR.0.05.csv")
+```
+
+### Other visualizations - MA plots
+```{r}
+plotMA(res_ord, ylim=c(-6,6), main = "Raw Log2 Fold change")
+
+# calculate shrunken fold change estimate
+res_shrink <- lfcShrink(dds, 
+                    coef=paste0(resultsNames(dds)[which(resultsNames(dds)=="condition_BO_excess_vs_BF_excess")]), 
+                    type="apeglm")
+```
+
+After performing the shrinkage procedure, we compare the raw and shrunken LFCs to assess the impact of shrinkage. 
+
+**Raw estimates of log2 FC:**
+```{r fig.align="center"}
+plotMA(res_ord, ylim=c(-6,6), main = "Raw Log2 Fold change")
+```
+
+**Shrunken estimates of log2 FC:**
+```{r fig.align="center"}
+plotMA(res_shrink, ylim=c(-6,6), main = "Shrunken Log2 Fold change")
+```
+
+#### Hierachical clustering on the DEGs
+```{r fig.align="center"}
+rld <- rlog(dds, blind = FALSE)
+ind_to_keep <- c(which(colData(rld)$condition=="BO_excess"), which(colData(rld)$condition=="BF_excess"))
+
+# set up gene expression matrix 
+mat1 <- assay(rld)[rownames(res_order_FDR_05), ind_to_keep]
+
+# scale matrix by each col. values 
+mat_scaled = t(apply(mat1, 1, scale))
+
+# set up colors for heatmap 
+col = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+cols1 <- brewer.pal(11, "Paired")
+cols2 <- brewer.pal(9, "Greens")
+
+# subset coldata for samples in untx and ex groups
+colData_sub <- colData(dds)[ind_to_keep, ]
+
+# set up annotation bar for samples 
+ha1 = HeatmapAnnotation(Group = colData_sub$condition, 
+                        col = list(Group = c("BO_excess" = cols1[1],
+                                             "BF_excess" = cols1[2])), 
+                                   show_legend = TRUE)
+
+# se up column annotation labels (samples)
+ha = columnAnnotation(x = anno_text(colData_sub$condition, 
+                                    which="column", rot = 45, 
+                                    gp = gpar(fontsize = 10)))
+
+# generate heatmap object 
+ht1 = Heatmap(mat_scaled, name = "Expression", col = col, 
+              top_annotation = c(ha1), 
+              bottom_annotation = c(ha),
+              show_row_names = FALSE)
+
+# plot the heatmap 
+draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)")
+
+# save heatmap to pdf
+pdf(file = "bfrag_s5-6_heatmap.pdf", width = 11, height = 8.5)
+draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)")
+dev.off()
+```
+
+***
+
+## Comparing Mixed Samples to One Another Aligned to *B. ovatus*:
+Finally, I wanted to compare the co-cultured samples to one another when aligned to the *B. ovatus* genome to look for gene expression differences when *B. ovatus* is in the minority population.
+### Read in raw count data 
+
+```{r}
+# read in the matrix we generated using htseq-count 
+cts <- as.matrix(read.table("Counts/bova_s5-6_all_counts.txt", 
+                            sep = "\t", 
+                            header = TRUE, 
+                            row.names=1, 
+                            stringsAsFactors = F))
+
+# filter out these last 5 rows 
+cts <- cts[1:(nrow(cts)-5),]
+
+# Take a quick look
+head(cts)
+tail(cts)
+```
+
+### Read in sample metadata
+```{r}
+# read in the file from the SRA metadata that has sample/experimental labels 
+colData <- read.csv("Metadata/bova_s5-6_metadata.csv", row.names=1)
+head(colData)
+
+# order by SRA run accession 
+colData <- colData[order(colData$bacteroides_type),]
+
+# quick look 
+head(colData)
+
+# now make this a factor as it will be the variable we will use define groups for the differential expression analysis 
+colData$condition
+
+# Making sure BO_excess is the baseline sample
+colData$condition <- factor(colData$condition, levels=c("BO_excess", "BF_excess"))
+```
+
+### Construct the *DESeq2* data set & explore the characteristics of the data
+Create the `DESeqDataSet` object. 
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = colData,
+                              design = ~ condition)
+```
+
+Exploring DESeq2 class object a bit to get to familiar with its contents. 
+
+```{r}
+# have a quick look at the object 
+dds
+
+# print structure 
+str(dds)
+
+# several accessor functions exist to access specific data 'slots'
+head(counts(dds))
+head(colData(dds))
+
+# specific slots can also be accessed using the '@'
+dds@colData
+
+# drop genes with low counts 
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+dim(dds)
+```
+
+Save the DESeq object at this point (so that we don't have to do the above everytime we want to work with our data). 
+
+```{r}
+save(dds, file = "bova_s5-6_DESeq2.rdata")
+```
+
+### Normalization of raw counts 
+```{r}
+dds <- estimateSizeFactors(dds)
+
+# looking at distribution of size factors
+sizeFactors(dds)
+hist(sizeFactors(dds), 
+     breaks=6, col = "cornflowerblue",
+     xlab="Size factors", ylab="No. of samples", 
+     main= "Size factor distribution over samples")
+```
+
+After we have calculated the size factors, we can use the `counts()` function, with `normalized` set to `TRUE`), to return the matrix of counts where each column (each library/sample) have been divided by the size factors calculated by the `estimateSizeFactors()` function. 
+
+```{r}
+counts_norm <- counts(dds, normalized=TRUE)
+head(counts_norm)
+```
+
+Comparing the normalized to the raw counts, we can clearly see that they are different. 
+
+```{r}
+head(counts(dds, normalized=FALSE))
+```
+
+We can use this table of normalized read counts to compare values for individual genes across samples. We might want to use this to (sanity) check the expression of a few genes of interest, before we actually do any statistical modelling. I chose *gyrB* as it's an essential gene.
+
+```{r}
+# lets make a function to generate a quick plot of the normalized counts 
+gene_plot <- function(DYI28, gene_symbol){
+  # save the normalized counts in a dataframe 
+  cnts <- counts(dds, normalized=TRUE)
+  colnames(cnts) <- colData(dds)$condition
+  # extract the counts for specified DYI28 ID and add sample group data 
+  df1 <- data.frame(log2(cnts[DYI28,]), colData(dds)$condition)
+  colnames(df1) <- c(paste0("log2_gene"), "condition")
+  # use ggplot2 to make a plot of counts vs sample group 
+  p1<- ggplot(df1, aes(condition, log2_gene)) + 
+    geom_jitter(aes(color = condition)) + 
+    ggtitle(paste0(gene_symbol), " - Log2 Normalized counts")
+  # print the plot 
+  print(p1)
+}
+
+# now apply the function to print a plot for a specified gene 
+gene_plot(DYI28 = "DYI28_20555", gene_symbol = "gyrB")
+```
+
+Based on this plot, it looks like when aligned to the *B. ovatus* genome, the BO_excess samples cluster similarly and one sample of the BF_excess samples has a higher log2 value than the others.
+
+### Exploratory Data Analysis & QC
+#### PCA Plots
+
+```{r}
+rld <- rlog(dds, blind = FALSE)
+head(assay(rld))
+
+par(mfrow=c(1,2))
+plot(log2(cts[,1]+1), log2(cts[,2]+1), col = "cornflowerblue", xlab = "Sample 1", ylab = "Sample 2", main = "Log2 + 1")
+plot(assay(rld)[,1], assay(rld)[,2], col = "indianred", xlab = "Sample 1", ylab = "Sample 2", main = "rlog")
+
+# calculate gene expression level variance between samples 
+var <- rev(rowVars(assay(rld))[order(rowVars(assay(rld)))])
+
+# plot variance for genes across samples
+plot(var, las = 1, main="Sample gene expression variance", xlab = "Gene", ylab = "Variance")
+abline(v=1000, col="red") ; abline(v=500, col="green") ; abline(v=250, col="blue")
+```
+
+At around 500 the variance starts to spike upwards, so this is the number we"ll use.
+
+```{r}
+# modify variable feature number to be used in PCA and hierarchical clustering based on no. of most variable features 
+var_feature_n <- 500 
+
+# perform PCA and order by variance 
+rv <- rowVars(assay(rld))
+select <- order(rv, decreasing = TRUE)[seq_len(min(var_feature_n, length(rv)))]
+pca <- prcomp(t(assay(rld)[select, ]))
+
+# extract the varioance explained by each PC 
+percentVar <- pca$sdev^2/sum(pca$sdev^2)
+names(percentVar)[1:5] <- c("PC1", "PC2", "PC3", "PC4", "PC5")
+percentVar <- percentVar[1:5]
+
+# plot variance for top 10 PCs 
+barplot(percentVar[1:5], col = "indianred", las = 1, ylab = "% Variance", cex.lab = 1.2)
+```
+
+We can see that the majority of variance is explained by the first few PCs, therefore generate a PCA plot for PC1 vs PC2.
+
+```{r}
+# construct data frame w/ PC loadings and add sample labels 
+pca_df <- as.data.frame(pca$x)
+pca_df$condition <- dds@colData$condition
+pca_df$sample_ids <- colnames(dds)
+
+# add colors for plotting to df 
+pca_df$col <- NA
+for(i in 1:length(levels(pca_df$condition))){
+  ind1 <- which(pca_df$condition == levels(pca_df$condition)[i])
+  pca_df$col[ind1] <- i
+}
+
+# plot PC1 vs PC2
+plot(pca_df[, 1], pca_df[, 2], 
+     xlab = paste0("PC1 (", (round(percentVar[1], digits=3)*100), "% variance)"), 
+     ylab = paste0("PC2 (", (round(percentVar[2], digits=3)*100), "% variance)"),
+     main=paste0("PC1 vs PC2 for ", var_feature_n, " most variable genes"),
+     pch=16, cex=1.35, cex.lab=1.3, cex.axis = 1.15, las=1, 
+     panel.first = grid(),
+     col=pca_df$col)
+text((pca_df[, 2])~(pca_df[, 1]), labels = pca_df$condition, cex=0.6, font=2, pos=4)
+```
+
+Once again both groups seem to cluster apart from one another.
+
+#### Hierarchial Clustering
+
+```{r}
+# select top X no. of variable genes 
+topVarGenes <- head(order(rowVars(assay(rld)), decreasing=TRUE),
+                    var_feature_n)
+
+# set up gene expression matrix 
+mat1 <- assay(rld)[topVarGenes,]
+
+# scale matrix by each col. values 
+mat_scaled = t(apply(mat1, 1, scale))
+
+# set up colors for heatmap 
+col = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+cols1 <- brewer.pal(11, "Paired")
+cols2 <- brewer.pal(9, "Greens")
+
+# set up annotation bar for samples 
+ha1 = HeatmapAnnotation(Group = colData(dds)$condition, 
+                        col = list(Group = c("BF_excess" = cols1[1], 
+                                             "BO_excess" = cols1[2])), 
+                                   show_legend = TRUE)
+
+# se up column annotation labels (samples)
+ha = columnAnnotation(x = anno_text(colData(dds)$condition, 
+                                    which="column", rot = 45, 
+                                    gp = gpar(fontsize = 10)))
+
+# generate heatmap object 
+ht1 = Heatmap(mat_scaled, 
+              name = "Expression", 
+              col = col, 
+              top_annotation = c(ha1), 
+              bottom_annotation = c(ha),
+              show_row_names = FALSE)
+
+# plot the heatmap 
+draw(ht1, row_title = "Genes", column_title = "Top 500 most variable genes")
+```
+
+Here we can see each group actually clusters more together than when these samples were aligned to the *B. fragilis* genome. I wondered if this could be an indication of a certain read depth that should be achieved for the minority population, but it looks like each replicate got around 3 million uniquely mapped reads.
+
+### Apply DESeq2 procedure to the data
+```{r}
+# run the DEseq2 analysis 
+dds <- DESeq(dds)
+
+# looking at distribution of raw counts
+hist(counts(dds, normalized=FALSE)[,5], breaks = 500, col="blue",
+     xlab="Raw expression counts", ylab="Number of genes",
+     main = "Count distribution for sample X")
+
+head(counts(dds, normalized=FALSE))
+# calculate mean and varaince for group of replicates
+mean_counts <- apply(counts(dds, normalized=FALSE)[,1:3], 1, mean)
+variance_counts <- apply(counts(dds, normalized=FALSE)[,1:3], 1, var)
+
+# plot the mean variance trend 
+plot(log10(mean_counts), log10(variance_counts), 
+     ylim=c(0,9), xlim=c(0,9), 
+     ylab = "log10 (variance)", xlab = "log10 (mean counts)", 
+     main = "Mean-variance trend", las = 1)
+
+# add line for x=y
+abline(0,1,lwd=2,col="red")
+```
+
+We can plot a few different Neg Binomial distributions to examine how the dispersion parameter affects the spread of the data.
+
+```{r}
+# generate a random varaible using the negative binomial distribution
+### dispersion = 10
+par(mfrow=c(3,1))
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.001), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.001")
+### dispersion = 10
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.01), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.01")
+### dispersion = 10
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.1), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.1")
+```
+
+It is clear that as the dispersion increases, the variation around the mean also increases.
+
+Plotting the dispersion estimates:
+```{r fig.align="center"}
+plotDispEsts(dds)
+```
+
+This by far is the best curve of all of the comparisons, so I feel like I have the most confidence in these results and the tet- vs. tet+ comparison results. I'm still not sure what the deal is with the other two *B. fragilis* comparisons 
+
+### Differential expression analysis - Hypothesis testing
+
+```{r fig.align="center"}
+# quickly check the available coefficients we could extract 
+resultsNames(dds)
+# get results for DEG analysis (and order by Pval) by specifying design 
+res <- results(dds, 
+  name = "condition_BF_excess_vs_BO_excess", 
+  alpha = 0.05, 
+  lfcThreshold = 0)
+res
+```
+```{r}
+res <- results(dds, alpha = 0.05, 
+  contrast = c("condition", "BF_excess", "BO_excess"), 
+  lfcThreshold = 0)
+res
+```
+
+Looking at the results and how many genes were statistically significant at an adjusted P-value threshold of 0.05
+```{r}
+# order by adj Pval 
+res_ord <- res[order(res$padj),] 
+res_ord
+# quick check for how many DEGs with significance @ 5% level in either FC direction 
+sum(res$padj < 0.05, na.rm=TRUE)
+sum(res$padj < 0.05 & res$log2FoldChange > 2, na.rm=TRUE)
+sum(res$padj < 0.05 & res$log2FoldChange < -2, na.rm=TRUE)
+
+# or to get both padj < 0.05 and log2FoldChange > 2 or < -2
+sum(res$padj < 0.05 & res$log2FoldChange > 2| res$padj < 0.05 & res$log2FoldChange< -2, na.rm=TRUE)
+
+# looking at number of nas
+table(is.na(res$padj))
+
+# plotting the number of rejections
+plot(metadata(res_ord)$filterNumRej, 
+     type="b", ylab="number of rejections",
+     xlab="quantiles of filter (mean norm. counts)")
+lines(metadata(res_ord)$lo.fit, col="red")
+abline(v=metadata(res_ord)$filterTheta)
+
+# filtering out the nas
+res_ord <- res_ord[!is.na(res_ord$padj),]
+```
+
+**### Add gene annotation to the results** Come back to this
+
+### Visualization of Differential Expression 
+#### Volcano plot
+```{r, message=FALSE, fig.align="center"}
+plot(res$log2FoldChange, -log10(res$pvalue), 
+     main = "Volcano plot", 
+     las = 1, col = "indianred",
+     ylab = "- log10 P-value", xlab = "log2 Fold change")
+
+# add horizontal lines to help guide interpretation
+abline(h=-log10(0.05/nrow(res)), lty = 2, col = "black") # Bonferonni 
+abline(h=-log10(0.05), lty = 2, col = "black") # nominal P-value 
+
+# save a dataframe from the results() output
+res_tmp <- as.data.frame(res_ord)
+
+# add a column that will be used to save the colors we want to plot 
+res_tmp$cols <- c()
+
+# set the significance cut off (alpha) and fold change threshold to be used for coloring of genes 
+alpha <- 0.05/nrow(res)
+fc_cutoff <- 2
+
+# loop through our dataframe and add values to the color column based on magnitude of alpha and LFCs 
+res_tmp$cols <- NA
+for(i in 1:nrow(res_tmp)){
+    if(is.na(res_tmp$pvalue[i])){
+      res_tmp$cols[i] <- NA
+    }
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i] > fc_cutoff){
+      res_tmp$cols[i] <- "indianred"
+    } 
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i] < -fc_cutoff){
+      res_tmp$cols[i] <- "indianred"
+    } 
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i]>-fc_cutoff & res_tmp$log2FoldChange[i]<fc_cutoff){
+      res_tmp$cols[i] <- "cornflowerblue"
+    } 
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] > fc_cutoff){
+      res_tmp$cols[i] <- "gray47" 
+    }
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] < -fc_cutoff){
+      res_tmp$cols[i] <- "gray47" 
+    }
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] < fc_cutoff){
+      res_tmp$cols[i] <- "gray10" 
+    }
+}
+  
+
+res_tmp$gene <- rownames(res_tmp)
+# generate the plot 
+p = ggplot(res_tmp, aes(log2FoldChange, -log10(pvalue))) + 
+    geom_point(aes(col=col), alpha = 0.5, size =2.5, colour = res_tmp$cols, fill = res_tmp$cols)  + 
+    xlab("Log2 fold change") + ylab("-log10 Q-value") +
+    ylim(0, 61) + 
+    xlim(-4, 8) +
+    geom_hline(yintercept = -log10(alpha), color = "black", linetype = "dashed", size = 0.4) + 
+    theme(legend.key = element_blank()) + 
+    ggtitle("BO_excess vs BF_excess") 
+
+# print the plot 
+print(p)
+
+# annotating genes of interest
+library(ggrepel)
+p2 <- p + 
+  # add labels to genes w/ LFC > 2 and above alpha threshold
+  geom_label_repel(data = subset(res_tmp, log2FoldChange > 2 & pvalue < alpha), aes(label = gene), 
+                     box.padding   = 0.35,
+                     nudge_x = 0.1,
+                     nudge_y = 0.1,
+                     point.padding = 1,
+                     label.size = 0.1,
+                     segment.size = 0.3,
+                     segment.color = 'grey50', size = 3) +
+  # add labels to genes w/ LFC < -2 and above alpha threshold
+  geom_label_repel(data = subset(res_tmp, log2FoldChange < -2 & pvalue < alpha), aes(label = gene), 
+                     box.padding   = 0.35,
+                     nudge_x = -0.1,
+                     nudge_y = 0.1,
+                     point.padding = 1,
+                     label.size = 0.1,
+                     segment.size = 0.3,
+                     segment.color = 'grey50', size = 3) +
+  # add vertical fold change lines 
+  geom_vline(xintercept = fc_cutoff, colour = "black", linetype="dotted") + 
+  geom_vline(xintercept = -fc_cutoff, colour = "black", linetype="dotted")
+
+# print the plot 
+print(p2)
+```
+
+**Save our results to .csv files**
+```{r}
+# save volcano to pdf
+pdf(file = "bova_s5-6_volcano.pdf", width = 20, height = 9)
+plot(p2)
+dev.off()
+
+# subset @ 5% adjusted pval sig. level 
+res_order_FDR_05 <- res_ord[res_ord$padj<0.05,]
+nrow(res_order_FDR_05)
+
+# write both to csv files
+write.csv(as.data.frame(res_ord), file= "bova_s5-6_DE_results.csv")
+write.csv(as.data.frame(res_order_FDR_05), file="bova_s5-6_DE_results.FDR.0.05.csv")
+```
+
+### Other visualizations - MA plots
+```{r}
+plotMA(res_ord, ylim=c(-6,6), main = "Raw Log2 Fold change")
+
+# calculate shrunken fold change estimate
+res_shrink <- lfcShrink(dds, 
+                    coef=paste0(resultsNames(dds)[which(resultsNames(dds)=="condition_BF_excess_vs_BO_excess")]), 
+                    type="apeglm")
+```
+
+After performing the shrinkage procedure, we compare the raw and shrunken LFCs to assess the impact of shrinkage. 
+
+**Raw estimates of log2 FC:**
+```{r fig.align="center"}
+plotMA(res_ord, ylim=c(-6,6), main = "Raw Log2 Fold change")
+```
+
+**Shrunken estimates of log2 FC:**
+```{r fig.align="center"}
+plotMA(res_shrink, ylim=c(-6,6), main = "Shrunken Log2 Fold change")
+```
+
+#### Hierachical clustering on the DEGs
+A final visualization that is useful to generate is a heatmap based on unsupervised hierarchical clustering of the DEGs identified. We can do this by limiting the matrix of rlog values to only those for the DEGs, and then performing the clustering specifically on these data. 
+
+```{r fig.align="center"}
+rld <- rlog(dds, blind = FALSE)
+ind_to_keep <- c(which(colData(rld)$condition=="BF_excess"), which(colData(rld)$condition=="BO_excess"))
+
+# set up gene expression matrix 
+mat1 <- assay(rld)[rownames(res_order_FDR_05), ind_to_keep]
+
+# scale matrix by each col. values 
+mat_scaled = t(apply(mat1, 1, scale))
+
+# set up colors for heatmap 
+col = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+cols1 <- brewer.pal(11, "Paired")
+cols2 <- brewer.pal(9, "Greens")
+
+# subset coldata for samples in untx and ex groups
+colData_sub <- colData(dds)[ind_to_keep, ]
+
+# set up annotation bar for samples 
+ha1 = HeatmapAnnotation(Group = colData_sub$condition, 
+                        col = list(Group = c("BF_excess" = cols1[1],
+                                             "BO_excess" = cols1[2])), 
+                                   show_legend = TRUE)
+
+# set up column annotation labels (samples)
+ha = columnAnnotation(x = anno_text(colData_sub$condition, 
+                                    which="column", rot = 45, 
+                                    gp = gpar(fontsize = 10)))
+
+# generate heatmap object 
+ht1 = Heatmap(mat_scaled, name = "Expression", col = col, 
+              top_annotation = c(ha1), 
+              bottom_annotation = c(ha),
+              show_row_names = FALSE)
+
+# plot the heatmap 
+draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)")
+
+# save heatmap to pdf
+pdf(file = "bova_s5-6_heatmap.pdf", width = 11, height = 8.5)
+draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)")
+dev.off()
+```
+
+## Gene Annotations, GO Information, and Pathway Enrichment.
+
+Finally, we want to annotate the differentially expressed genes and find their respective GO annotations to add to a final results file with every piece of data we might be interested in. 
+
+To find the gene annotations, I went into Geneious and looked at the full genome for each species, go to the *Annotations* tab, then *Columns* and add any info I might be interested in. Then I exported it as a csv file to the `Annotation_files/` folder I created. 
+
+First I needed to add NAs to any empty wells found in the annotation files and filtered it to include only one iteration of each entry. I just chose *CDS* as a filter:
+
+```{r}
+# Annotating gene/protein names to final output files
+bfrag_an <- read.csv("Annotation_files/Bfrag_NCTC9343_Annotations.csv", stringsAsFactors = FALSE, na.strings = c("", "NA"))
+View(bfrag_an)
+print(unique(bfrag_an$Type))
+bfrag_an <- filter(bfrag_an, bfrag_an$Type == c("CDS"))
+View(bfrag_an)
+
+bova_an <- read.csv("Annotation_files/Bovatus_3725_di_iv_Annotations.csv", stringsAsFactors = FALSE)
+print(unique(bova_an$Type))
+bova_an <- filter(bova_an, bova_an$Type == c("CDS"))
+View(bova_an)
+```
+
+Then I opened the DE results files and renamed the columns changing the first column to "locus_tag". This will be useful when I merge the annotations with this file as I will use this column as the common argument.
+
+```{r}
+# Filtering the full results files
+bfrag_alone <- read.csv("Final_Results/b frag tet- vs b frag tet+/bfrag_alone_DE_results.csv", stringsAsFactors = FALSE)
+bfrag_alone <- bfrag_alone[order(bfrag_alone$X),]
+View(bfrag_alone)
+colnames(bfrag_alone)
+colnames(bfrag_alone) <- c("locus_tag", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+
+bfrag_tet_multi <- read.csv("Final_Results/b frag tet- vs co-cultures (aligned to b frag)/bfrag_tet-_vs_mixed_DE_results.csv", stringsAsFactors = FALSE)
+bfrag_tet_multi <- bfrag_tet_multi[order(bfrag_tet_multi$X),]
+View(bfrag_tet_multi)
+colnames(bfrag_tet_multi)
+colnames(bfrag_tet_multi) <- c("locus_tag", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+
+bfrag_co <- read.csv("Final_Results/Co-culture comparison (aligned to b frag)/bfrag_s5-6_DE_results.csv", stringsAsFactors = FALSE)
+bfrag_co <- bfrag_co[order(bfrag_co$X),]
+View(bfrag_co)
+colnames(bfrag_co)
+colnames(bfrag_co) <- c("locus_tag", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+
+bova_co <- read.csv("Final_Results/Co-culture comparison (aligned to b ova)/bova_s5-6_DE_results.csv", stringsAsFactors = FALSE)
+bova_co <- bova_co[order(bova_co$X),]
+View(bova_co)
+colnames(bova_co)
+colnames(bova_co) <- c("locus_tag", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+```
+
+Next I merged the filtered annotation file and the results file by the "locus_tag" column and saved it as a     `results_Annotated` file.
+
+```{r}
+library(tidyverse)
+
+# annotating the full files
+bfrag_alone_annotated <- merge(bfrag_alone, bfrag_an, by = c("locus_tag"))
+View(bfrag_alone_annotated)
+write_csv(bfrag_alone_annotated, "Final_Results/b frag tet- vs b frag tet+/bfrag_alone_DE_results_Annotated.csv")
+
+bfrag_tet_multi_annotated <- merge(bfrag_tet_multi, bfrag_an, by = c("locus_tag"))
+View(bfrag_tet_multi_annotated)
+write_csv(bfrag_tet_multi_annotated, "Final_Results/b frag tet- vs co-cultures (aligned to b frag)/bfrag_tet-_vs_mixed_DE_results_Annotated.csv")
+
+bfrag_co_annotated <- merge(bfrag_co, bfrag_an, by = c("locus_tag"))
+View(bfrag_co_annotated)
+write_csv(bfrag_co_annotated, "Final_Results/Co-culture comparison (aligned to b frag)/bfrag_s5-6_DE_results_Annotated.csv")
+
+bova_co_annotated <- merge(bova_co, bova_an, by = c("locus_tag"))
+View(bova_co_annotated)
+write_csv(bova_co_annotated, "Final_Results/Co-culture comparison (aligned to b ova)/bova_s5-6_DE_results_Annotated.csv")
+```
+
+I repeated these steps using the files with only significant genes.
+
+```{r}
+# Filtering the padj < 0.05 results files
+bfrag_alone <- read.csv("Final_Results/b frag tet- vs b frag tet+/bfrag_alone_DE_results.FDR.0.05.csv", stringsAsFactors = FALSE)
+bfrag_alone <- bfrag_alone[order(bfrag_alone$X),]
+View(bfrag_alone)
+colnames(bfrag_alone)
+colnames(bfrag_alone) <- c("locus_tag", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+
+bfrag_tet_multi <- read.csv("Final_Results/b frag tet- vs co-cultures (aligned to b frag)/bfrag_tet-_vs_mixed_DE_results.FDR.0.05.csv", stringsAsFactors = FALSE)
+bfrag_tet_multi <- bfrag_tet_multi[order(bfrag_tet_multi$X),]
+View(bfrag_tet_multi)
+colnames(bfrag_tet_multi)
+colnames(bfrag_tet_multi) <- c("locus_tag", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+
+bfrag_co <- read.csv("Final_Results/Co-culture comparison (aligned to b frag)/bfrag_s5-6_DE_results.FDR.0.05.csv", stringsAsFactors = FALSE)
+bfrag_co <- bfrag_co[order(bfrag_co$X),]
+View(bfrag_co)
+colnames(bfrag_co)
+colnames(bfrag_co) <- c("locus_tag", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+
+bova_co <- read.csv("Final_Results/Co-culture comparison (aligned to b ova)/bova_s5-6_DE_results.FDR.0.05.csv", stringsAsFactors = FALSE)
+bova_co <- bova_co[order(bova_co$X),]
+View(bova_co)
+colnames(bova_co)
+colnames(bova_co) <- c("locus_tag", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+
+library(tidyverse)
+
+# annotating the padj < 0.05 files
+bfrag_alone_annotated <- merge(bfrag_alone, bfrag_an, by = c("locus_tag"))
+View(bfrag_alone_annotated)
+write_csv(bfrag_alone_annotated, "Final_Results/b frag tet- vs b frag tet+/bfrag_alone_DE_results.FDR.0.05_Annotated.csv")
+
+bfrag_tet_multi_annotated <- merge(bfrag_tet_multi, bfrag_an, by = c("locus_tag"))
+View(bfrag_tet_multi_annotated)
+write_csv(bfrag_tet_multi_annotated, "Final_Results/b frag tet- vs co-cultures (aligned to b frag)/bfrag_tet-_vs_mixed_DE_results.FDR.0.05_Annotated.csv")
+
+bfrag_co_annotated <- merge(bfrag_co, bfrag_an, by = c("locus_tag"))
+View(bfrag_co_annotated)
+write_csv(bfrag_co_annotated, "Final_Results/Co-culture comparison (aligned to b frag)/bfrag_s5-6_DE_results.FDR.0.05_Annotated.csv")
+
+bova_co_annotated <- merge(bova_co, bova_an, by = c("locus_tag"))
+View(bova_co_annotated)
+write_csv(bova_co_annotated, "Final_Results/Co-culture comparison (aligned to b ova)/bova_s5-6_DE_results.FDR.0.05_Annotated.csv")
+```
+
+Lastly, I wanted to merge the newly annotated results files with the GO information I got off of the [**UniProt**](https://www.uniprot.org/help/gene_ontology) website, using their *Retrieve/ID Mapping* tab and saved them into a `GO_Info` file. Since I wasn't confident with the info I got for the *B. ovatus* genome, I chose not to do this step for those samples.
+
+In the same chunk for each sample I renamed the first column in the `GO_Info` file to say "locus_tag" and then merged the two files together in the same way as before. I then saved them into a `GO_annotations` file which should contain as much information as I could possibly obtain for each gene.
+
+```{r}
+# tet- vs tet+
+bfrag_alone_an <- read.csv("Final_Results/b frag tet- vs b frag tet+/bfrag_alone_DE_results.FDR.0.05_Annotated.csv", stringsAsFactors = FALSE)
+colnames(bfrag_alone_an)
+bfrag_alone_go <- read.csv("Final_Results/b frag tet- vs b frag tet+/bfrag_alone_GO_Info_200806.csv", stringsAsFactors = FALSE)
+colnames(bfrag_alone_go)
+View(bfrag_alone_go)
+colnames(bfrag_alone_go) <- c("locus_tag", "Entry", "Entry.name", "Protein.names", "Gene.names", "Organism",
+                              "Length", "Gene.names.ORF", "Gene.names.primary", "Gene.ontology.biological.process",
+                              "Gene.ontology.cellular.component", "Gene.ontology.GO", "Gene.ontology.molecular.function", 
+                              "Gene.ontology.IDs", "Cross.reference.RefSeq", "EnsemblBacteria.transcript")
+colnames(bfrag_alone_go)
+bfrag_alone_final <- merge(bfrag_alone_an, bfrag_alone_go, by = c("locus_tag"))
+View(bfrag_alone_final)
+write_csv(bfrag_alone_final, "Final_Results/b frag tet- vs b frag tet+/bfrag_alone_DE_results_GO_annotated.csv")
+
+# bfrag vs tet-
+bfrag_tet_an <- read.csv("Final_Results/b frag tet- vs co-cultures (aligned to b frag)/bfrag_tet-_vs_mixed_DE_results.FDR.0.05_Annotated.csv", stringsAsFactors = FALSE)
+colnames(bfrag_tet_an)
+bfrag_tet_go <- read.csv("Final_Results/b frag tet- vs co-cultures (aligned to b frag)/bfrag_tet-_vs_mixed_GO_Info_200806.csv", stringsAsFactors = FALSE)
+colnames(bfrag_tet_go)
+View(bfrag_tet_go)
+colnames(bfrag_tet_go) <- c("locus_tag", "Entry", "Entry.name", "Status", "Protein.names", "Gene.names", "Organism",
+                              "Length", "Gene.names.ORF", "Gene.names.primary", "Gene.ontology.biological.process",
+                              "Gene.ontology.cellular.component", "Gene.ontology.GO", "Gene.ontology.molecular.function", 
+                              "Gene.ontology.IDs", "Cross.reference.RefSeq", "EnsemblBacteria.transcript")
+colnames(bfrag_tet_go)
+bfrag_tet_final <- merge(bfrag_tet_an, bfrag_tet_go, by = c("locus_tag"))
+View(bfrag_tet_final)
+write_csv(bfrag_tet_final, "Final_Results/b frag tet- vs co-cultures (aligned to b frag)/bfrag_tet_DE_results_GO_annotated.csv")
+
+# bfrag co-culture comparison
+bfrag_co_an <- read.csv("Final_Results/Co-culture comparison (aligned to b frag)/bfrag_s5-6_DE_results.FDR.0.05_Annotated.csv", stringsAsFactors = FALSE)
+colnames(bfrag_co_an)
+bfrag_co_go <- read.csv("Final_Results/Co-culture comparison (aligned to b frag)/bfrag_s5-6_GO_Info_200806.csv", stringsAsFactors = FALSE)
+colnames(bfrag_co_go)
+View(bfrag_co_go)
+colnames(bfrag_co_go) <- c("locus_tag", "Entry", "Entry.name", "Protein.names", "Gene.names", "Organism",
+                            "Length", "Gene.names.ORF", "Gene.names.primary", "Gene.ontology.biological.process",
+                            "Gene.ontology.cellular.component", "Gene.ontology.GO", "Gene.ontology.molecular.function", 
+                            "Gene.ontology.IDs", "Cross.reference.RefSeq", "EnsemblBacteria.transcript")
+colnames(bfrag_co_go)
+bfrag_co_final <- merge(bfrag_co_an, bfrag_co_go, by = c("locus_tag"))
+View(bfrag_co_final)
+write_csv(bfrag_co_final, "Final_Results/Co-culture comparison (aligned to b frag)/bfrag_co_DE_results_GO_annotated.csv")
+```
+
+I also generated enrichment files in which I put only the significant DE genes in the FDR < 0.05 file into a [**Shiny web app**](http://bioinformatics.sdstate.edu/go/) and searched for all of the possible gene sets including GO and KEGG information, how significant these genes are among the total input, which genes are included, and how many genes there are in the respective pathway in total. There was not an exact match for the *B. ovatus* species, so I would definitely take those results with a grain of salt. 

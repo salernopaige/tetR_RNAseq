@@ -1,0 +1,5 @@
+# Paths to respective directories for each step in the pipeline
+fastq_dir: "/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/raw_reads/"
+trimmed_dir: "/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/trimmed/"
+alignment_dir: "/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/alignment/"
+htseq_counts_dir: "/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/htseq_counts/"
