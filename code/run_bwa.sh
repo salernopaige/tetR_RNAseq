@@ -4,41 +4,36 @@
 index="/dartfs/rc/lab/R/RossB/SalernoP/tetR_RNAseq/ref/bfrag"
 
 # Set the path to the directory containing the FASTQ files
-fastq_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/raw_reads/"
+trimmed_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/trimmed/"
 
 # Set the path to the directory for the output alignment files
 alignment_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/alignment/"
 
-# Loop through all the FASTQ files in the directory
-for fastq_file in "$fastq_dir"*.fastp.fastq.gz; do
-    # Get the sample name from the FASTQ file name
-    sample=$(basename "$fastq_file" _R1_fastp_fastq.gz)
-  
-    # Set the paths to the input FASTQ files
-    read1="${fastq_dir}${sample}_R1.fastp.fastq.gz"
-    read2="${fastq_dir}${sample}_R2.fastp.fastq.gz"
-  
-    # Set the path to the output alignment file
-    alignment_output="${alignment_dir}${sample}_aligned.sam"
-  
-    # Run BWA alignment using bwa mem
-    bwa mem "$index" "$read1" "$read2" > "$alignment_output"
+# Get the sample name from the FASTQ file name
+sample="$1"
 
-    # Completed alignment message
-    echo "Alignment completed for ${sample}"
+# Set the paths to the input FASTQ files
+read1="${trimmed_dir}${sample}_R1.fastp.fastq.gz"
+read2="${trimmed_dir}${sample}_R2.fastp.fastq.gz"
 
-    # Sort SAM file using samtools 
-    sort_file="${sample}_aligned.sorted.sam"
-    samtools sort "$alignment_output" -o "$sort_file"
+# Run BWA alignment using bwa mem
+align_out="${alignment_dir}${sample}_aligned.sam"
+bwa mem "$index" "$read1" "$read2" > "$align_out"
 
-    # Convert SAM to BAM using samtools
-    bam_output="${alignment_dir}${sample}_aligned.bam"
-    samtools view -bS "$alignment_output" > "$bam_output"
+# Sort SAM file using samtools
+sort_file="${alignment_dir}${sample}.sorted.sam"
+samtools sort "$align_out" -o "$sort_file"
 
-    # Index the BAM file using samtools
-    samtools index "$bam_output"
+# Sort and convert SAM to BAM using samtools
+alignment_output="${alignment_dir}${sample}.sorted.bam"
+samtools view -Sb "$sort_file" > "$alignment_output"
 
-    # BAM processing message
-    echo "Completed Samtools for ${sample}"
+# Index the BAM file using samtools
+samtools index "$alignment_output"
 
-done
+# Remove the temporary SAM file
+rm "$align_out"
+rm "$sort_file"
+
+# Completed alignment message
+echo "Alignment completed for ${sample}"

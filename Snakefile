@@ -1,56 +1,77 @@
 # RNA-Seq analysis for B. fragilis samples treated with and without tetracycline
 # Paige Salerno July 13th, 2023
 
+from pathlib import Path
+
 # Load configuration from YAML file
 configfile: "config.yaml"
-
-# Sample names
-samples = config['samples']
+fastq=Path(config['fastq_dir'])
+trimmed=Path(config['trimmed_dir'])
+alignment=Path(config['alignment_dir'])
+htseq=Path(config['htseq_counts_dir'])
+sample=config['samples']
 
 # Target rule
 rule all:
     input:
-        "all_counts.txt",
-	"{sample}_fastp_R1.fastq.gz",
+        "%s/all_counts.txt" %(htseq),
+        expand("%s/{sample}_R1.fastp.fastq.gz" %(trimmed), sample=sample),
+        expand("%s/{sample}_R2.fastp.fastq.gz" %(trimmed), sample=sample),
+        expand("%s/{sample}.sorted.bam" %(alignment), sample=sample),
+        expand("%s/{sample}.sorted.bam.bai" %(alignment), sample=sample),
+        expand("%s/{sample}_counts.txt" %(htseq), sample=sample)
 
 # Rule to run fastp
 rule run_fastp:
     input:
-        S1=config['fastq_dir'] + "{sample}_R1.fastq.gz",
-        S2=config['fastq_dir'] + "{sample}_R2.fastq.gz"
+        S1="%s/{sample}_R1.fastq.gz" %(fastq),
+        S2="%s/{sample}_R2.fastq.gz" %(fastq)
     output:
-        out_read1=config['trimmed_dir'] + "{sample}_fastp_R1.fastq.gz",
-        out_read2=config['trimmed_dir'] + "{sample}_fastp_R2.fastq.gz"
+        out_read1="%s/{sample}_R1.fastp.fastq.gz" %(trimmed),
+        out_read2="%s/{sample}_R2.fastp.fastq.gz" %(trimmed)
     shell:
-        "./run_fastp.sh"
+        "./code/run_fastp.sh {wildcards.sample}"
+
+rule fastp_all:
+     input:
+        read1=expand("%s/{sample}_R1.fastp.fastq.gz" %(trimmed), sample=sample),
+        read2=expand("%s/{sample}_R2.fastp.fastq.gz" %(trimmed), sample=sample)
 
 # Rule to run BWA alignment
 rule run_bwa:
     input:
-        read1=config['trimmed_dir'] + "{sample}_fastp_R1.fastq.gz",
-        read2=config['trimmed_dir'] + "{sample}_fastp_R2.fastq.gz"
+        read1="%s/{sample}_R1.fastp.fastq.gz" %(trimmed),
+        read2="%s/{sample}_R2.fastp.fastq.gz" %(trimmed)
     output:
-        alignment_output=config['alignment_dir'] + "{sample}_aligned.bam",
-        bam_output=config['alignment_dir'] + "{sample}_aligned.sorted.bam",
-        bam_index=config['alignment_dir'] + "{sample}_aligned.sorted.bam.bai"
+        bam_output="%s/{sample}.sorted.bam" %(alignment),
+        bam_index="%s/{sample}.sorted.bam.bai" %(alignment)
     shell:
-        "./run_bwa.sh"
+        "./code/run_bwa.sh {wildcards.sample}"
+
+rule bwa_all:
+    input:
+        bam_output=expand("%s/{sample}.sorted.bam" %(alignment), sample=sample),
+        bam_index=expand("%s/{sample}.sorted.bam.bai" %(alignment), sample=sample)
 
 # Rule to run HTSeq-count
 rule run_htseq:
     input:
-        bam_file=config['alignment_dir'] + "{sample}_aligned.sorted.bam"
+        bam_file="%s/{sample}.sorted.bam" %(alignment)
     output:
-        counts_output=config['htseq_counts_dir'] + "{sample}_counts.txt"
+        counts_output="%s/{sample}_counts.txt" %(htseq)
     shell:
-        "./run_htseq.sh"
+        "./code/run_htseq.sh {wildcards.sample}"
+
+rule htseq_all:
+    input:
+        expand("%s/{sample}_counts.txt" %(htseq), sample=sample)
 
 # Rule to run the expression matrix script
 rule run_exp_matrix:
     input:
-        counts_files=expand(config['htseq_counts_dir'] + "{sample}_counts.txt", sample=config['samples'])
+        counts_files=expand("%s/{sample}_counts.txt" %(htseq), sample=sample)
     output:
-        expression_matrix="all_counts.txt"
+        expression_matrix="%s/all_counts.txt" %(htseq)
     shell:
-        "./run_exp_matrix.sh"
+        "./code/run_exp_matrix.sh {input.counts_files}"
 
