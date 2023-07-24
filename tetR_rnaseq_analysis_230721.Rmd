@@ -1,0 +1,718 @@
+---
+title: "tetR RNA-Seq 7/21/23"
+author: "Paige Salerno"
+date: "7/21/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(root.dir = "/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/")
+```
+
+
+## Running Differential Expression Analysis on Samples:
+First I want to load all of the required packages for each comparison:
+```{r, include=F}
+library(dplyr)
+library(ggplot2)
+library(DESeq2)
+library(vsn)
+library(pheatmap)
+library(gplots)
+library(RColorBrewer)
+library(ComplexHeatmap)
+library(circlize)
+library(xtable)
+library(kableExtra)
+```
+
+### Read in raw count data 
+I downloaded the all_counts.txt matrix that I generated on the Dartmouth server and split it into multiple smaller files that I will use for each comparison. These file names will be designated in the `read.table` command for each comparison.
+```{r}
+# read in the matrix generated using htseq-count 
+cts <- as.matrix(read.table("../../RobitailleS/rnaseq_230705/htseq_counts/all_counts.txt", 
+                            sep = "\t", 
+                            header = TRUE, 
+                            row.names=1, 
+                            stringsAsFactors = F))
+
+# filter out last 5 rows 
+cts <- cts[1:(nrow(cts)-5),]
+
+# Check to make sure it's good
+head(cts)
+tail(cts)
+```
+
+### Read in sample metadata
+I also need to read in the sample annotation (metadata) that I created which contains sample and experimental labels. 
+
+```{r}
+# read in the  metadata that has sample/experimental labels 
+colData <- read.csv("../../RobitailleS/rnaseq_230705/results/tetR_metadata_230721.csv")
+head(colData)
+
+# order by bacteroides_type 
+colData <- colData[order(colData$Sample_Name),]
+
+# quick look 
+head(colData)
+```
+
+I want to take a look at the experimental design variables (conditions). 
+```{r}
+# now want to make this a factor as it will be the variable used to define groups for the differential expression analysis 
+colData$Condition
+```
+
+It is important that we make this variable a (`factor`) class variable, with the reference group (first listed condition) set as the variable we want to be considered baseline expression. If it had not already been done, can create an ordered factor variable from a character string in R using: 
+```{r}
+colData$Condition <- factor(colData$Condition, levels=c("control", "mutant"))
+```
+
+### Construct the DESeq2 data set & explore the characteristics of the data 
+[**DESeq2**](https://bioconductor.org/packages/release/bioc/manuals/DESeq2/man/DESeq2.pdf) provides a specific function `DESeqDataSetFromHTSeqCount` to read in gene-level read count abundances from *htseq-count*. 
+
+**DESeq2** uses an object class called the `DESeqDataSet` that stores the read counts, metadata, experimental design, and all the intermediate values calculated during the analysis. `DESeqDataSet` extends the `SummarizedExperiment` class object from the `SummarizedExperiment` R/Bioconductor package that is commonly used to store data from expression studies and other genomics assays in R.
+
+Creating the `DESeqDataSet` object:
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = colData,
+                              design = ~ Condition)
+```
+
+In the future I could have also tried doing this using the `DESeqDataSetFromHTSeqCount()` function by specifying a `SampleTable` that includes the path to the htseq-count files, however since the read counts were compiled into one file, the dataset can just be loaded directly. 
+
+Before moving on, I wanted to explore the DESeq2 class object a bit to get to familiar with its contents. 
+```{r}
+# have a quick look at the object 
+dds
+
+# print structure 
+str(dds)
+
+# several accessor functions exist to access specific data 'slots'
+head(counts(dds))
+head(colData(dds))
+
+# specific slots can also be accessed using the '@'
+dds@colData
+```
+
+I want to drop genes that have less than 10 reads across all samples, as there just isn't enough information for these genes to fit robust statistical models to. 
+
+```{r}
+# drop genes with low counts 
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+dim(dds)
+```
+
+Lets also save the DESeq object at this point (so that we don't have to do the above every time we want to work with our data). 
+
+```{r}
+save(dds, file = "../../RobitailleS/rnaseq_230705/results/tetR_DESeq2_230721.rdata")
+```
+
+### Normalization of raw counts 
+Before comparing expression levels of specific genes between samples, and performing any differential expression analyses, I needed to normalize the data to account for variation in expression that is not related to true differential expression. There are two major sources variation that have to be adjusted for in the normalization process for RNA-seq data when we wish to compare expression levels between samples: 
+
+#### Library size/sequencing depth  
+
+Although we generally try to pool samples together (each sample is tagged with a barcode and samples are combined) at similar concentrations in a sequencing run, some samples will end up being sequenced more than others, leading to slight differences in how many reads are produced for that sample, and therefore sequencing depth and size. Furthermore, if samples are sequenced on separate runs, their sequencing depths may be very different. If we don't account for this variation in sequencing depth, we might conclude some genes are expressed at greater levels in a sample that has simply been sequenced to a higher depth. 
+
+#### Library composition 
+
+The presence of truly differentially expressed genes (in particular, DEGs with very large fold changes) between samples will cause the number of reads for other genes in those samples to be skewed. For example, in the below example, gene C is differentially expressed between the two samples, with much higher expression in sample 1. This high number of reads causes fewer reads to be detected for other genes in this sample, making it appear that these other genes are expressed at lower levels than in sample 2, however this is simply an artifact of library composition differences between the samples. 
+
+To correct for **library size** AND **library composition**, DESeq2 uses a algorithm referred to as the **median-of-ratios** method. A brief summary of the steps is:  
+
+1. Take the log of all values in raw count matrix  
+2. Average each row (genes)
+3. Filter out genes with Infinity values
+4. Subtract average log count value from log of count for each cell (due to the laws of working with logarithms, this is essentially calculating the ratio of the counts for gene X in 1 sample to the average counts for gene X across all samples)
+5. Calculate the median of the ratios in each sample (column)
+6. Take exponents of medians to get the **size factors** for each sample/library. 
+7. Divide the count for each gene in each sample by the size factor calculated for that sample. 
+
+This procedure will generate a matrix of read counts that are corrected for both **library size** and **library composition**, and are stored in our (`DESeqDataset`) object. DESeq2 uses the function (`estimateSizeFactors()`) to perform this algorithm and calculate size factors for each sample. To do this for the (`DESeqDataset`). 
+
+```{r}
+dds <- estimateSizeFactors(dds)
+```
+
+Once the size factors are calculated, you can look at their distribution to get a feel for how they vary and how much normalization between the samples is required. 
+
+```{r}
+sizeFactors(dds)
+hist(sizeFactors(dds), 
+     breaks=6, col = "cornflowerblue",
+     xlab="Size factors", ylab="No. of samples", 
+     main= "Size factor distribution over samples")
+```
+
+I can then use the `counts()` function, with `normalized` set to `TRUE`, to return the matrix of counts where each column (each library/sample) has been divided by the size factors calculated by the `estimateSizeFactors()` function. 
+
+```{r}
+counts_norm <- counts(dds, normalized=TRUE)
+head(counts_norm)
+```
+
+Comparing the normalized to the raw counts, it's clear they are different. 
+
+```{r}
+head(counts(dds, normalized=FALSE))
+```
+
+To compare values for individual genes across samples, these normalized read counts can be used. It's also a good (sanity) check to look at the expression of a few genes of interest, before actually doing any statistical modelling. I chose *gyrB* as an essential gene.
+
+```{r}
+# lets make a function to generate a quick plot of the normalized counts 
+gene_plot <- function(BF9343, gene_symbol){
+  # save the normalized counts in a dataframe 
+  cnts <- counts(dds, normalized=TRUE)
+  colnames(cnts) <- colData(dds)$Condition
+  # extract the counts for specified BF9343 ID and add sample group data
+  df1 <- data.frame(log2(cnts[BF9343,]), colData(dds)$Condition)
+  colnames(df1) <- c(paste0("log2_gene"), "Condition")
+  # use ggplot2 to make a plot of counts vs sample group 
+  p1<- ggplot(df1, aes(Condition, log2_gene)) + 
+    geom_jitter(aes(color = Condition)) + 
+    ggtitle(paste0(gene_symbol), " - Log2 Normalized counts")
+  # print the plot 
+  print(p1)
+}
+
+# now apply the function to print a plot for a specified gene 
+gene_plot(BF9343 = "gene-BF9343_0242", gene_symbol = "gyrB")
+```
+It looks like there's one tet- sample that has gyrB expression much lower than the others, but with the y axis range being so small relatively speaking, I think it'll be okay.
+
+### Exploratory Data Analysis & QC
+#### PCA Plots
+
+PCA is a mathematical procedure that calculates vectors that explain variation in the dataset (in this case, variation in gene expression), and orders samples along these vectors. The expectation is that samples that are more similar to each other, e.g. replicates, would be very close to each other along these axes of variation, while we might expect samples in different treatment groups to be further away.
+
+Each vector that is calculated is called a principal component (PC), and each principal component explains less variation in our dataset than the last. e.g, PC1 explains more variation in gene expression differences between the samples than PC2. If we plot PC1 against PC2, samples will ‘cluster’ with other samples that have similar gene expression profiles, and be further away from samples with more distant expression profiles.
+
+We can illustrate the benefit of using the rlog over standard log transformation (+ a pseudo-count for genes with 0 counts where the log of 0 is infinity) by comparing the transformed values for two samples against each other.
+```{r}
+rld <- rlog(dds, blind = FALSE)
+head(assay(rld))
+
+par(mfrow=c(1,2))
+plot(log2(cts[,1]+1), log2(cts[,2]+1), col = "cornflowerblue", xlab = "Sample 1", ylab = "Sample 2", main = "Log2 + 1")
+plot(assay(rld)[,1], assay(rld)[,2], col = "indianred", xlab = "Sample 1", ylab = "Sample 2", main = "rlog")
+```
+
+We can use these transformed values to investigate how many features (genes) in our dataset exhibit variability across samples. This is useful to know as we only want to use variable features for PCA. Genes that don’t explain any variation in the dataset aren’t useful for helping us explore differences between the samples.
+```{r}
+# calculate gene expression level variance between samples 
+var <- rev(rowVars(assay(rld))[order(rowVars(assay(rld)))])
+
+# plot variance for genes accross samples
+plot(var, las = 1, main="Sample gene expression variance", xlab = "Gene", ylab = "Variance")
+abline(v=1000, col="red") ; abline(v=500, col="green") ; abline(v=250, col="blue")
+```
+
+At around 500 genes, the variance starts to spike upwards, so this is the number of variable features (genes) to use. I'm going to restrict the dataset to 500 genes for purposes of the PCA. I therefore need to extract and visualize the variance explained by each PC to determine which are most informative.
+
+```{r}
+# modify variable feature number to be used in PCA and hierachical clutering based on no. of most variable features 
+var_feature_n <- 500 
+
+# perform PCA and order by variance 
+rv <- rowVars(assay(rld))
+select <- order(rv, decreasing = TRUE)[seq_len(min(var_feature_n, length(rv)))]
+pca <- prcomp(t(assay(rld)[select, ]))
+
+# extract the variance explained by each PC 
+percentVar <- pca$sdev^2/sum(pca$sdev^2)
+names(percentVar)[1:5] <- c("PC1", "PC2", "PC3", "PC4", "PC5")
+percentVar <- percentVar[1:5]
+
+# plot variance for top 10 PCs 
+barplot(percentVar[1:5], col = "indianred", las = 1, ylab = "% Variance", cex.lab = 1.2)
+```
+
+The majority of variance is explained by the first few PCs, therefore visualizing where samples fall along these PCs will be the most informative way to identify major differences between them, based on their gene expression profiles. To generate a PCA plot for PC1 vs PC2:
+```{r}
+# construct data frame w/ PC loadings and add sample labels 
+pca_df <- as.data.frame(pca$x)
+pca_df$Condition <- dds@colData$Condition
+pca_df$sample_ids <- colnames(dds)
+
+# add colors for plotting to df 
+pca_df$col <- NA
+for(i in 1:length(levels(pca_df$Condition))){
+  ind1 <- which(pca_df$Condition == levels(pca_df$Condition)[i])
+  pca_df$col[ind1] <- i
+}
+
+# plot PC1 vs PC2
+plot(pca_df[, 1], pca_df[, 2], 
+     xlab = paste0("PC1 (", (round(percentVar[1], digits=3)*100), "% variance)"), 
+     ylab = paste0("PC2 (", (round(percentVar[2], digits=3)*100), "% variance)"),
+     main=paste0("PC1 vs PC2 for ", var_feature_n, " most variable genes"),
+     pch=16, cex=1.35, cex.lab=1.3, cex.axis = 1.15, las=1, 
+     panel.first = grid(),
+     col=pca_df$col)
+text((pca_df[, 2])~(pca_df[, 1]), labels = pca_df$Condition, cex=0.6, font=2, pos=4)
+```
+
+#### Hierarchial Clustering
+Hierarchical clustering is another complimentary approach to explore the relationships between samples. While supervised clustering approaches exist, we will perform an unsupervised analysis so that we do not impose any restrictions on the clustering of the samples.
+
+Hierachical clustering is often associated with heatmaps, as it is a useful way to explore the results of hierachical clustering. Here we represent genes are rows, and individual samples as columns. The denrograms on the rows and the columns represent the ‘distances’ calculated between each of the genes/samples. Presenting the data in this way is useful as it allows us to identify samples whose patterns of gene expression are similar to each other, but also modules of genes that change in a similar way across our samples, and may share some common function of interest.
+
+The first step in a hierachical clustering analysis is to scale the data. This means that expression levels are all transformed onto the same scale before clustering. This is important to do as we can only visualize so many colors at once, and a very highly expressed gene would mean that all the other genes would essentially invisible on this scale. Scaling for clustering in this way is typically performed by calculating Z-scores, where the mean for each gene across all the samples is subtracted from each of the individual expression values for each gene, this centers the expression values around 0. We then divide these values by the standard deviation to make sure the data is more tightly grouped, and we can represent lots of genes in the same scale.
+
+```{r}
+# select top X no. of variable genes 
+topVarGenes <- head(order(rowVars(assay(rld)), decreasing=TRUE),
+                    var_feature_n)
+
+# set up gene expression matrix 
+mat1 <- assay(rld)[topVarGenes,]
+
+# scale matrix by each col. values 
+mat_scaled = t(apply(mat1, 1, scale))
+
+# set up colors for heatmap 
+col = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+cols1 <- brewer.pal(11, "Paired")
+cols2 <- brewer.pal(9, "Greens")
+
+# set up annotation bar for samples 
+ha1 = HeatmapAnnotation(Group = colData(dds)$Condition, 
+                        col = list(Group = c("control" = cols1[1], 
+                                             "mutant" = cols1[2])), 
+                                   show_legend = TRUE)
+
+# set up column annotation labels (samples)
+ha = columnAnnotation(x = anno_text(colData(dds)$Condition, 
+                                    which="column", rot = 45, 
+                                    gp = gpar(fontsize = 10)))
+
+# generate heatmap object 
+ht1 = Heatmap(mat_scaled, 
+              name = "Expression", 
+              col = col, 
+              top_annotation = c(ha1), 
+              bottom_annotation = c(ha),
+              show_row_names = FALSE)
+
+# plot the heatmap 
+draw(ht1, row_title = "Genes", column_title = "Top 500 most variable genes")
+```
+
+While the samples cluster on the dendograms really well, the raw expression data of the top 500 genes is kind of all over the place prior to running the differential expression analysis.
+
+### Apply DESeq2 procedure to the data
+```{r}
+# run the DEseq2 analysis 
+dds <- DESeq(dds)
+```
+
+Before running the differential expression analysis, I want to look at some of the standard characteristics of RNA-seq data. The first and most obvious thing to do is look at how the distribution of the raw counts.
+```{r}
+hist(counts(dds, normalized=FALSE)[,5], breaks = 500, col="blue",
+     xlab="Raw expression counts", ylab="Number of genes",
+     main = "Count distribution for sample X")
+```
+
+Perhaps the most obvious feature of this distribution is the large number of genes with very low count values. This occurs as there are many genes expressed at low levels relative to the highly expressed genes, which are fewer in number. This causes the distribution to have a long right tail, ultimately causing the dynamic range of RNA-seq data to be very large. 
+
+These features of how RNA-seq data is distributed are important in selecting the statistical model used to test differential expression. Importantly, we can see from the histogram that the data is **not** normally distributed, therefore any statistical model based on the normal distribution is not appropriate for this dataset. By looking again at the matrix of raw counts, it is actually clear that RNA-seq is integer count data, therefore we should use a statistical model for count-based data. 
+
+```{r}
+head(counts(dds, normalized=FALSE))
+```
+At this point it might be useful to define a few terms that are really important to know in order to understand as we fit statistical models to RNA-seq data. 
+
+**mean** - the average count of a gene across samples
+**variance** - the spread of count values across samples for a gene
+**dispersion** - the amount that the variance deviates from the mean
+
+One commonly used distribution for count data is **Poisson distribution**, however, there is a feature of RNA-seq data that makes the Poisson distribution a little too simplistic for such data, called **overdispersion**. 
+
+**Overdispersion** describes the situation where the variance for a set of observations generally exceeds the mean of those observations. We can visualize overdispersion in RNA-seq data by plotting the mean-variance relationship for a group of replicates in our data. 
+```{r}
+# calculate mean and variance for group of replicates
+mean_counts <- apply(counts(dds, normalized=FALSE)[,1:3], 1, mean)
+variance_counts <- apply(counts(dds, normalized=FALSE)[,1:3], 1, var)
+
+# plot the mean variance trend 
+plot(log10(mean_counts), log10(variance_counts), 
+     ylim=c(0,9), xlim=c(0,9), 
+     ylab = "log10 (variance)", xlab = "log10 (mean counts)", 
+     main = "Mean-variance trend", las = 1)
+
+# add line for x=y
+abline(0,1,lwd=2,col="red")
+```
+
+**We can clearly see a few features of the mean variance trend from this plot:**
+1. The data does not fall along the x = y line, as it would if the mean = variance. Instead, the variance is generally greater than the mean, making the variance overdispersed. 
+2. There is more difference in the variance between low count genes than there is among higher count genes, therefore the variance is unequal across the range of count values (non-constant variance is sometimes referred to as **heteroscadicity**).
+
+To account for this **overdispersion**, we use a generalization of the *Poisson distribution* called the **negative-binomial (NB) distribution**. The NB dist. includes a **dispersion parameter** that accounts for the amount the variance exceeds the mean (the *Poisson variance*). It is clearly important that we do this, because **the variance changes dramatically depending on the expression level of the gene you are observing**. 
+
+We can plot a few different NB distributions to examine how the dispersion parameter affects the spread of the data.
+```{r}
+# generate a random variable using the negative binomial distribution
+### dispersion = 10
+par(mfrow=c(3,1))
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.001), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.001")
+### dispersion = 10
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.01), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.01")
+### dispersion = 10
+hist(rnbinom(n = 10000, mu = 100, size = 1/0.1), 
+     xlim = c(0, 300), xlab = "", breaks = 500, 
+     main = " Dispersion 0.1")
+```
+
+It is clear that as the dispersion increases, the variation around the mean also increases. The mean, variance, and dispersion are linked by the equation: 
+
+variance = mean + dispersion x 2 mean-squared ( var = mu + disp. * mu^2 )
+
+In order to accurately model differential expression for the genes in our dataset, `DESeq2` uses this equation to obtain estimates for the dispersion of each gene within each sample group (e.g. tet- and tet+ separately). 
+
+**However,** for the small number of replicates available in RNA-seq data, these estimates of dispersion at the gene-level are often inaccurate. 
+
+To improve these gene-level estimates of dispersion, `DESeq2` uses another statistical model called **empirical bayes** to *'shrink'* these initial dispersion estimates toward a *'prior'* mean, which is calculated by fitting a curve to the initial dispersion estimates. 
+
+This procedure produces **more accurate estimates of dispersion** as it shares information across genes with similar expression levels to predict a more appropriate dispersion for those genes. This is rational as the formula linking the mean, variance, and dispersion tells us that the variance is the only thing affecting the magnitude of the dispersion for genes with the similar mean expression. 
+
+**The major factors affecting how much a gene's dispersion is shrunk toward the prior mean are:**  
+1. the number of samples in the group under consideration (the more reps the better)  
+2. how far the initial dispersion is from the prior mean
+
+**We can plot the dispersion estimates for our own data using:**
+```{r fig.align="center"}
+plotDispEsts(dds)
+```
+An example of a well calibrated set of dispersion estimates would be seen due to two features: the final MAP estimates are well scattered around the fitted line, and the dispersion trend decreases with increasing mean expression. 
+
+If the MAP estimates were more structured in these plots, we would be concerned that the model is not estimating dispersions well for our data, indicating something may be wrong with the dataset, e.g. outlier samples, a batch effect, low quality samples/data, potential contamination etc.
+
+In this case it looks like there is a well-distributed around the fitted line, but while there is an initial decrease with increasing mean expression, it seems to level off. I'm not 100% sure what to make of that. 
+
+**It is important to confirm your dispersion estimates are well calibrated before performing your differential expression analysis, as accurate estimation of dispersion is critical in controlling the false-positive rate in experiments with smaller sample sizes (most RNA-seq experiments)**. 
+
+### Differential expression analysis - Hypothesis testing
+
+Now that we understand how the dispersions are estimated, we are ready to fit the data and test each gene for differential expression.
+
+We fit the data using a **generalized linear model (GLM)**. GLM's are a family of statistical models that generalize standard linear regression in two ways:  
+- use of probability distributions other than the normal distribution 
+- the use of a *link-function* that links the expression values in the linear model to the experimental groups, in a way that these other distributions (such as the NB) can be used. 
+
+Since we are need to model our counts using the negative-binomial distribution, the GLM we will fit is of the NB family of GLMs. 
+In order to fit the GLM, we need the **mean count of each gene** across the samples in each experimental group, and the **dispersion of that gene** in those groups. The mean count is a combination of the expected expression level and the size factor, so that our model is corrected for **library size and composition**. 
+
+The process of fitting the model to the expression and dispersion values for each gene results in final set of **model coefficients** for each sample group, which can be interpreted as the **log2 fold-change** in expression for that gene between the baseline group and each comparison group. 
+
+Each of the model coefficients has an associated **standard error** associated with it, which we can use to calculate a **P-value** and perform a process called **hypothesis testing**. Through hypothesis testing we test the *null hypothesis* that the log2 fold-change between experimental groups for an individual gene is not significantly different from 0 (no change in expression). 
+
+**The default test used by `DESeq2` for hypothesis testing is the *Wald-test*, which is implemented as follows: **  
+1. The *coefficient (log 2 fold-change)* is divided by the *standard error* (measure of statistical accuracy of the measurement).  
+2. The resulting *Z-statistic* is compared to a standard normal distribution (mean = 0, sd = 1) in order to compute a P-value.  
+3. If the P-value is less than our pre-determined threshold for significance, we reject the null hypothesis and accept the alternative, that the gene is significantly DE.  
+
+**Note:** `DESeq2` can also implement a *likelihood ratio test* (LRT), which is used to compare expression across more than two groups. For example, if you collected samples over a range of time points and you wanted to test if gene expression changed significantly over these time points, you could use the LRT instead of the wald-test. **It would be nice to try this out in the future**.
+
+`DESeq2` already performed all of the steps for hypothesis testing using the wald-test for us when we ran the `DESeq2()` function. All we have to do is tell DESeq2 which results we want to look at, which can be done using the `results()` function, and specifying the coefficients that we want by using the `names` argument. 
+```{r fig.align="center"}
+# quickly check the available coefficients we could extract 
+resultsNames(dds)
+# get results for DEG analysis (and order by Pval) by specifying design 
+res <- results(dds, 
+  name = "Condition_mutant_vs_control", 
+  alpha = 0.05, 
+  lfcThreshold = 0)
+res
+```
+**A couple of things to note here:**  
+
+- `alpha` is set to 0.05 (5%) to correct the P-values for multiple hypothesis testing (example with more detail on this coming up below). By default, the "BH" method is used (Benjamini & Hochberg) which controls the false discovery rate (FDR). Corrected P-values are found in the `padj` column of the `results()` output, while the uncorrected P-values are found in the `pvalue` column. Other methods to control for multiple hypothesis testing can be specified using the `pAdjustMethod` argument in the `results()` function, such as the more conservative **Bonferonni** method. 
+
+- `lfcThreshold` is set to 0, and is the default value. This tests the hypothesis that the log2 fold change values between our experimental conditions are equal to 0. Different fold change values can be specified, which can be useful if you observe a large number of significantly differentially expressed genes with small fold changes, and you want to restrict the test to the genes with the largest differences (fold changes) between your conditions (we could also achieve this by restricting the results to genes with significant P-values AND have an absolute fold change > a specific threshold, however when we do this, the P-values loose some of their meaning).  
+
+```{r}
+res <- results(dds, alpha = 0.05, 
+  contrast = c("Condition", "control", "mutant"), 
+  lfcThreshold = 0)
+res
+```
+
+**Lets have a quick look at the results and how many genes were statistically significant at an adjusted P-value threshold of 0.05. **
+```{r}
+# order by adj Pval 
+res_ord <- res[order(res$padj),] 
+res_ord
+# quick check for how many DEGs with significance @ 5% level in either FC direction 
+sum(res$padj < 0.05, na.rm=TRUE)
+sum(res$padj < 0.05 & res$log2FoldChange > 1, na.rm=TRUE)
+sum(res$padj < 0.05 & res$log2FoldChange < -1, na.rm=TRUE)
+
+# or to get both padj < 0.05 and log2FoldChange > 2 or < -2
+sum(res$padj < 0.05 & res$log2FoldChange > 1| res$padj < 0.05 & res$log2FoldChange< -1, na.rm=TRUE)
+```
+
+You may have noticed I am using `na.rm=TRUE` in the `sum()` function above.
+
+```{r}
+table(is.na(res$padj))
+```
+
+This is not a mistake, but rather part of a deliberate filtering process conducted by `DESeq2`, in order to flag genes that have little or no change of being differentially expressed.
+
+This is of value as it means we can correct for fewer total tests and increase our statistical power to identify true positives.The three ways which `DESeq2` filters results are:   
+- Genes with counts = 0 in all samples
+- Genes with extreme outliers (determined using Cook's distance)
+- *Independent filtering* (identifying genes with low counts)
+
+*Independent filtering*, DESeq2 carries out an iterative process where it maximizes the value of the number of rejections over the quantiles of the mean normalized counts. Once the maximum number of rejections is identified, DESeq2 will select the quantile of the normalized counts that is 1 standard deviation below this maximum, and filter any results with mean counts below this threshold. It is essentially a fancy way of reducing the number of tests we need to run. 
+
+We can plot the number of rejections of the null hypothesis against mean counts, along with a vertical line, to help us understand at which mean count value DESeq2 chose to filter results for. Any genes with a mean expression value below this line will have their `padj` values set to NA, and discarded during multiple testing correction. 
+
+```{r fig.align="center"}
+plot(metadata(res_ord)$filterNumRej, 
+     type="b", ylab="number of rejections",
+     xlab="quantiles of filter (mean norm. counts)")
+lines(metadata(res_ord)$lo.fit, col="red")
+abline(v=metadata(res_ord)$filterTheta)
+```
+
+It's worth removing these results with NAs before moving forward to make our lives a little easier when handling the adjusted P-values. 
+```{r}
+res_ord <- res_ord[!is.na(res_ord$padj),]
+```
+
+### **Add gene annotation to the results** Come back to this in the future to figure out how to add actual gene names rather than numbers
+
+### Visualization of Differential Expression 
+#### Volcano plot
+
+```{r, message=FALSE, fig.align="center"}
+plot(res$log2FoldChange, -log10(res$pvalue), 
+     main = "Volcano plot", 
+     las = 1, col = "indianred",
+     ylab = "- log10 P-value", xlab = "log2 Fold change")
+
+# add horizontal lines to help guide interpretation
+abline(h=-log10(0.05/nrow(res)), lty = 2, col = "black") # Bonferonni 
+abline(h=-log10(0.05), lty = 2, col = "black") # nominal P-value 
+```
+  
+Here we can clearly see that there are quite a few genes above our significance threshold in both the up and downregulation directions (+ve and -ve fold changes), that also have absolute log2 fold change values of at least 1 or more. Of particular interest, there seem to be a few genes with very large fold change values & -log10 P-values, making them especially interesting as their effect size is large AND our confidence in this fold change is good. 
+
+It is a little hard to make specific inferences from this plot at the individual gene level, so some labels for interesting data points (and some colors) would definitely improve this volcano plot, and make it more informative. We will use the [**ggplot2**](https://cran.r-project.org/web/packages/ggplot2/ggplot2.pdf) R package to do this, and we will color each point based on a combination of fold change and P-value, as these determine which genes are of most interest to us. 
+```{r fig.align="center"}
+# save a dataframe from the results() output
+res_tmp <- as.data.frame(res_ord)
+
+# add a column that will be used to save the colors we want to plot 
+res_tmp$cols <- c()
+
+# set the significance cut off (alpha) and fold change threshold to be used for coloring of genes 
+## Original code
+# alpha <- 0.05/nrow(res)
+## Revised code
+alpha <- 0.05
+fc_cutoff <- 1
+
+# loop through our dataframe and add values to the color column based on magnitude of alpha and LFCs 
+res_tmp$cols <- NA
+for(i in 1:nrow(res_tmp)){
+    if(is.na(res_tmp$pvalue[i])){
+      res_tmp$cols[i] <- NA
+    }
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i] > fc_cutoff){
+      res_tmp$cols[i] <- "indianred"
+    } 
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i] < -fc_cutoff){
+      res_tmp$cols[i] <- "indianred"
+    } 
+    else if(res_tmp$pvalue[i]<=alpha & res_tmp$log2FoldChange[i]>-fc_cutoff & res_tmp$log2FoldChange[i]<fc_cutoff){
+      res_tmp$cols[i] <- "cornflowerblue"
+    } 
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] > fc_cutoff){
+      res_tmp$cols[i] <- "gray47" 
+    }
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] < -fc_cutoff){
+      res_tmp$cols[i] <- "gray47" 
+    }
+    else if(res_tmp$pvalue[i]>alpha & res_tmp$log2FoldChange[i] < fc_cutoff){
+      res_tmp$cols[i] <- "gray10" 
+    }
+}
+  
+
+res_tmp$gene <- rownames(res_tmp)
+# generate the splot 
+p = ggplot(res_tmp, aes(log2FoldChange, -log10(pvalue))) + 
+    geom_point(aes(col=col), alpha = 0.5, size =2, colour = res_tmp$cols, fill = res_tmp$cols)  + 
+    xlab("Log2 fold change") + ylab("-log10 P-value") +
+    ylim(0, 12) + 
+    xlim(-5, 5) +
+    geom_hline(yintercept = -log10(alpha), color = "black", linetype = "dashed", size = 0.4) + 
+    theme(legend.key = element_blank()) + 
+    theme_classic() +
+    ggtitle("WT vs. delta-tetR") 
+
+# print the plot 
+print(p)
+```
+
+Also adding some labels for potentially interesting genes would be useful. For this I used the [**ggrepel**](https://cran.r-project.org/web/packages/ggrepel/ggrepel.pdf) package. 
+```{r fig.align="center"}
+library(ggrepel)
+p2 <- p + 
+  # add labels to genes w/ LFC > 2 and above alpha threshold
+  geom_label_repel(data = subset(res_tmp, log2FoldChange > 1 & pvalue < alpha), aes(label = gene), 
+                     box.padding   = 0.35,
+                     nudge_x = 0.1,
+                     nudge_y = 0.1,
+                     label.size = 0.1,
+                     segment.size = 0.3,
+                     segment.color = 'grey50', 
+                   size = 3) +
+  # add labels to genes w/ LFC < -2 and above alpha threshold
+  geom_label_repel(data = subset(res_tmp, log2FoldChange < -1 & pvalue < alpha), aes(label = gene), 
+                     box.padding   = 0.35,
+                     nudge_x = -0.1,
+                     nudge_y = 0.1,
+                     label.size = 0.1,
+                     segment.size = 0.3,
+                     segment.color = 'grey50', 
+                   size = 3) +
+  # add vertical fold change lines 
+  geom_vline(xintercept = fc_cutoff, colour = "black", linetype="dotted") + 
+  geom_vline(xintercept = -fc_cutoff, colour = "black", linetype="dotted")
+
+# print the plot 
+print(p2)
+```
+
+**Save the results to .csv files**
+```{r}
+# save volcano plot
+pdf(file = "../../RobitailleS/rnaseq_230705/results/volcano_plot_230712.pdf", width = 11, height = 8.5)
+plot(p2)
+dev.off()
+
+# subset @ 5% adjusted pval sig. level 
+res_order_FDR_05 <- res_ord[res_ord$padj<0.05,]
+nrow(res_order_FDR_05)
+
+# write both to csv files
+write.csv(as.data.frame(res_ord), file= "../../RobitailleS/rnaseq_230705/results/DE_results_230721.csv")
+write.csv(as.data.frame(res_order_FDR_05), file="../../RobitailleS/rnaseq_230705/results/DE_results.FDR.0.05_230721.csv")
+```
+
+### Other visualizations - MA plots
+
+MA plots are also useful ways to visualize results from a DE analysis of RNA-seq data. These involve plotting the log2 fold-change (the so called M-value, representing the *M* in *MA-plot*) against the average expression level of a gene (the *A* in *MA-plot*). 
+
+The MA-plot allows us to inspect the **full range of expression values over which we detected significant DEGs, and what the magnitude of these fold-changes is**. In a typical experiment, we expect to see DEGs across most of the range of expression values. To help identify genes that were significantly DE, any gene with an adjusted P-value of < 0.05 (or whatever threshold is set) is colored in red. 
+```{r}
+plotMA(res_ord, ylim=c(-6,6), main = "Raw Log2 Fold change")
+```
+
+The **log2 fold-change** plotted above is the raw LFC value estimated by the negative binomial GLM that we used in modeling. However, as discussed above, the individual estimates of variance or dispersion for a single gene are often unreliable, and this holds true `log2 fold change` also. 
+
+**To obtain more useful LFC estimates,** `DESeq2` performs a statistical procedure that involves **shrinking the raw fold change estimates toward zero** for genes that are less likely to contain reliable or highly important information. 
+
+This is done in a very similar way to the shrinkage using empirical bayes that we discussed for the **dispersion estimates**. 
+
+**For shrinking LFC values, LFCs are penalized for properties such as: **  
+- low count values   
+- high dispersion (& thus reduced confidence in expression levels)  
+
+DESeq2 provides a function `lfcShrink()` that must be implemented separately of the standard workflow implemented using `DESeq2()`. 
+```{r}
+# calculate shrunken fold change estimate
+res_shrink <- lfcShrink(dds, 
+                    coef=paste0(resultsNames(dds)[which(resultsNames(dds)=="Condition_mutant_vs_control")]), 
+                    type="apeglm")
+```
+
+After performing the shrinkage procedure, we compare the raw and shrunken LFCs to assess the impact of shrinkage. 
+
+**Raw estimates of log2 FC:**
+```{r fig.align="center"}
+plotMA(res_ord, ylim=c(-6,6), main = "Raw Log2 Fold change")
+```
+
+**Shrunken estimates of log2 FC:**
+```{r fig.align="center"}
+plotMA(res_shrink, ylim=c(-6,6), main = "Shrunken Log2 Fold change")
+```
+
+
+We can see that **significantly DE genes are detected across the full range of expression values** (x-axis), which is a good sign that our differential expression modeling has worked well. We can also see that we have a handful of genes with larger expression values (> LFC 2) which potentially represent the most important individual genes, while the majority of our DEGs have a LFC < 1.5 (ish). 
+
+Comparing to the raw LFCs, we can also see that the **majority of genes with lower expression values have have their LFCs shrunk toward zero**. This is important as genes with low counts may simply end up with a large LFC since this is easy to do at small count values, but these are unlikely to be accurate fold-changes, so we don't want to prioritize their importance by giving them a large LFC. 
+
+It's always good to look at the shrunken estimates, to confirm that you don't have a lot of DEGs at very small count values. If you do, you may want to look at the expression levels for those genes to investigate these findings in more detail. 
+
+**As the mean or counts increase, it is evident that the level of shrinkage is less**, although may still be high for genes with greater dispersion estimates. As we move toward the more highly expressed genes, you can see how more genes at lower fold change values are able to be identified as significant, which is due to the fact that there is more information available for these genes, so we can be more confident during hypothesis testing of these genes. 
+
+**Note:** This shrinkage does not really change the hypothesis testing, therefore is performed independently, as is for use in prioritizing your results further for visual inspection or some sort of functional analysis (e.g. pathway analysis). 
+
+ 
+#### Hierachical clustering on the DEGs
+
+A final visualization that is useful to generate is a heatmap based on unsupervised hierachical clustering of the DEGs identified. We can do this by limiting the matrix of rlog values to only those for the DEGs, and then performing the clustering specifically on these data. 
+```{r fig.align="center"}
+rld <- rlog(dds, blind = FALSE)
+ind_to_keep <- c(which(colData(rld)$Condition=="control"), which(colData(rld)$Condition=="mutant"))
+
+# set up gene expression matrix 
+mat1 <- assay(rld)[rownames(res_order_FDR_05), ind_to_keep]
+
+# scale matrix by each col. values 
+mat_scaled = t(apply(mat1, 1, scale))
+
+# set up colors for heatmap 
+col = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+cols1 <- brewer.pal(11, "Paired")
+cols2 <- brewer.pal(9, "Greens")
+
+# subset coldata for samples in each group
+colData_sub <- colData(dds)[ind_to_keep, ]
+
+# set up annotation bar for samples 
+ha1 = HeatmapAnnotation(Group = colData_sub$Condition, 
+                        col = list(Group = c("control" = cols1[1],
+                                             "mutant" = cols1[2])), 
+                                   show_legend = TRUE)
+
+# set up column annotation labels (samples)
+ha = columnAnnotation(x = anno_text(colData_sub$Condition, 
+                                    which="column", rot = 45, 
+                                    gp = gpar(fontsize = 10)))
+
+# generate heatmap object 
+ht1 = Heatmap(mat_scaled, name = "Expression", col = col, 
+              top_annotation = c(ha1), 
+              bottom_annotation = c(ha),
+              show_row_names = FALSE)
+
+# plot the heatmap 
+draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)")
+
+# save plot
+pdf(file = "../../RobitailleS/rnaseq_230705/results/DEG_heatmap_230721.pdf", width = 11, height = 8.5)
+draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)")
+dev.off()
+
+```
+
