@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Set the path to the directory containing the BAM files
-bam_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/alignment/"
+bam_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230925/alignment/"
 
 # Set the path to the GFF/GTF annotation file
 annotation_file="/dartfs/rc/lab/R/RossB/SalernoP/tetR_RNAseq/ref/bfrag_NCTC_9343.gff"
 
 # Set the path to the directory for the HTSeq-count output files
-output_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/htseq_counts/"
+output_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230925/htseq_counts/"
 
 # Get the sample name from the BAM file name
 sample="$1"

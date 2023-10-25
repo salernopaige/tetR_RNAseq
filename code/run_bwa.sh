@@ -4,10 +4,10 @@
 index="/dartfs/rc/lab/R/RossB/SalernoP/tetR_RNAseq/ref/bfrag"
 
 # Set the path to the directory containing the FASTQ files
-trimmed_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/trimmed/"
+trimmed_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230925/trimmed/"
 
 # Set the path to the directory for the output alignment files
-alignment_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/alignment/"
+alignment_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230925/alignment/"
 
 # Get the sample name from the FASTQ file name
 sample="$1"

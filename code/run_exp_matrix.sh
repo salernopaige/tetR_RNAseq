@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set the path to the directory for the HTSeq-count output files
-output_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/htseq_counts/"
+output_dir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230925/htseq_counts/"
 
 # Get access to snakemake input files
 count_files=("$@")
@@ -26,7 +26,7 @@ for file in "${count_files[@]}"; do
 done
 
 # Extract ENSG gene IDs from one of the files
-cut -f 1 "${output_dir}tetR1_counts.txt" > "${output_dir}gene_IDs.txt"
+cut -f 1 "${output_dir}tetR1_pos_counts.txt" > "${output_dir}gene_IDs.txt"
 
 # Use the paste command to combine gene IDs and raw counts for all files into one file
 paste_cmd="paste ${output_dir}gene_IDs.txt "

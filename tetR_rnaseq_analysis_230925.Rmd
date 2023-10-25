@@ -1,12 +1,12 @@
 ---
-title: "tetR RNA-Seq 7/21/23"
+title: "tetR RNA-Seq 10/17/23"
 author: "Paige Salerno"
-date: "7/21/2023"
+date: "10/17/2023"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(root.dir = "/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/")
+knitr::opts_chunk$set(root.dir = "/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230925/")
 ```
 
 
@@ -30,7 +30,7 @@ library(kableExtra)
 I downloaded the all_counts.txt matrix that I generated on the Dartmouth server and split it into multiple smaller files that I will use for each comparison. These file names will be designated in the `read.table` command for each comparison.
 ```{r}
 # read in the matrix generated using htseq-count 
-cts <- as.matrix(read.table("../../RobitailleS/rnaseq_230705/htseq_counts/all_counts.txt", 
+cts <- as.matrix(read.table("../../RobitailleS/rnaseq_230925/htseq_counts/all_counts.txt", 
                             sep = "\t", 
                             header = TRUE, 
                             row.names=1, 
@@ -40,8 +40,8 @@ cts <- as.matrix(read.table("../../RobitailleS/rnaseq_230705/htseq_counts/all_co
 cts <- cts[1:(nrow(cts)-5),]
 
 # Check to make sure it's good
-head(cts)
-tail(cts)
+# head(cts)
+# tail(cts)
 ```
 
 ### Read in sample metadata
@@ -49,7 +49,7 @@ I also need to read in the sample annotation (metadata) that I created which con
 
 ```{r}
 # read in the  metadata that has sample/experimental labels 
-colData <- read.csv("../../RobitailleS/rnaseq_230705/results/tetR_metadata_230721.csv")
+colData <- read.csv("../../RobitailleS/rnaseq_230925/results/tetR_metadata_231017.csv")
 head(colData)
 
 # order by bacteroides_type 
@@ -63,11 +63,16 @@ I want to take a look at the experimental design variables (conditions).
 ```{r}
 # now want to make this a factor as it will be the variable used to define groups for the differential expression analysis 
 colData$Condition
+colData$Treatment
 ```
 
+### Split data here, for each comparison
+
 It is important that we make this variable a (`factor`) class variable, with the reference group (first listed condition) set as the variable we want to be considered baseline expression. If it had not already been done, can create an ordered factor variable from a character string in R using: 
+
 ```{r}
 colData$Condition <- factor(colData$Condition, levels=c("control", "mutant"))
+colData$Treatment <- factor(colData$Treatment, levels=c("min", "pos"))
 ```
 
 ### Construct the DESeq2 data set & explore the characteristics of the data 
@@ -112,7 +117,7 @@ dim(dds)
 Lets also save the DESeq object at this point (so that we don't have to do the above every time we want to work with our data). 
 
 ```{r}
-save(dds, file = "../../RobitailleS/rnaseq_230705/results/tetR_DESeq2_230721.rdata")
+save(dds, file = "../../RobitailleS/rnaseq_230925/results/tetR_DESeq2_231017.rdata")
 ```
 
 ### Normalization of raw counts 
@@ -258,10 +263,12 @@ plot(pca_df[, 1], pca_df[, 2],
      pch=16, cex=1.35, cex.lab=1.3, cex.axis = 1.15, las=1, 
      panel.first = grid(),
      col=pca_df$col)
-text((pca_df[, 2])~(pca_df[, 1]), labels = pca_df$Condition, cex=0.6, font=2, pos=4)
+text((pca_df[, 2])~(pca_df[, 1]), labels = pca_df$sample_ids, cex=0.5, font=2, pos=4)
+
 ```
+
 ```{r}
-pdf("../../RobitailleS/rnaseq_230705/results/PCA_230724.pdf", width = 8, height = 5)
+pdf("../../RobitailleS/rnaseq_230925/results/PCA_231017.pdf", width = 8, height = 5)
 plot(pca_df[, 1], pca_df[, 2], 
      xlab = paste0("PC1 (", (round(percentVar[1], digits=3)*100), "% variance)"), 
      ylab = paste0("PC2 (", (round(percentVar[2], digits=3)*100), "% variance)"),
@@ -269,7 +276,7 @@ plot(pca_df[, 1], pca_df[, 2],
      pch=16, cex=1.35, cex.lab=1.3, cex.axis = 1.15, las=1, 
      panel.first = grid(),
      col=pca_df$col)
-text((pca_df[, 2])~(pca_df[, 1]), labels = pca_df$Condition, cex=0.6, font=2, pos=4)
+text((pca_df[, 2])~(pca_df[, 1]), labels = pca_df$sample_ids, cex=0.6, font=2, pos=4)
 dev.off()
 ```
 
@@ -303,7 +310,7 @@ ha1 = HeatmapAnnotation(Group = colData(dds)$Condition,
                                    show_legend = TRUE)
 
 # set up column annotation labels (samples)
-ha = columnAnnotation(x = anno_text(colData(dds)$Condition, 
+ha = columnAnnotation(x = anno_text(colData(dds)$Sample_Name, 
                                     which="column", rot = 45, 
                                     gp = gpar(fontsize = 10)))
 
@@ -616,7 +623,7 @@ print(p2)
 **Save the results to .csv files**
 ```{r}
 # save volcano plot
-pdf(file = "../../RobitailleS/rnaseq_230705/results/volcano_plot_230712.pdf", width = 11, height = 8.5)
+pdf(file = "../../RobitailleS/rnaseq_230925/results/volcano_plot_231017.pdf", width = 11, height = 8.5)
 plot(p2)
 dev.off()
 
@@ -625,8 +632,8 @@ res_order_FDR_05 <- res_ord[res_ord$padj<0.05,]
 nrow(res_order_FDR_05)
 
 # write both to csv files
-write.csv(as.data.frame(res_ord), file= "../../RobitailleS/rnaseq_230705/results/DE_results_230721.csv")
-write.csv(as.data.frame(res_order_FDR_05), file="../../RobitailleS/rnaseq_230705/results/DE_results.FDR.0.05_230721.csv")
+write.csv(as.data.frame(res_ord), file= "../../RobitailleS/rnaseq_230925/results/DE_results_231017.csv")
+write.csv(as.data.frame(res_order_FDR_05), file="../../RobitailleS/rnaseq_230925/results/DE_results.FDR.0.05_231017.csv")
 ```
 
 ### Other visualizations - MA plots
@@ -722,9 +729,12 @@ ht1 = Heatmap(mat_scaled, name = "Expression", col = col,
 draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)")
 
 # save plot
-pdf(file = "../../RobitailleS/rnaseq_230705/results/DEG_heatmap_230721.pdf", width = 11, height = 8.5)
+pdf(file = "../../RobitailleS/rnaseq_230925/results/DEG_heatmap_231017.pdf", width = 11, height = 8.5)
 draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)")
 dev.off()
+```
 
+```{r}
+source("../../SalernoP/tetR_RNAseq/code/differential_exp_analysis.R")
 ```
 

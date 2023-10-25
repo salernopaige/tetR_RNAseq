@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Set the path to the fastq files
-indir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/raw_reads/"
+indir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230925/raw_reads/"
 
 # Set the path to the output files
-outdir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230705/trimmed/"
+outdir="/dartfs/rc/lab/R/RossB/RobitailleS/rnaseq_230925/trimmed/"
 
 # Get the sample name from the FASTQ file name
 sample="$1"
