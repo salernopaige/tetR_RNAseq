@@ -734,7 +734,186 @@ draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (p
 dev.off()
 ```
 
+### Processing using code from .R file
+I'm going to use the code I put in an R file for processing rather than the code used in the last round of sequencing for brevity and clarity. This way I will also be able to easily perform several comparisons quickly without major repetition. But the R file code is based on the code from the last round of sequencing. 
+
 ```{r}
 source("../../SalernoP/tetR_RNAseq/code/differential_exp_analysis.R")
 ```
 
+```{r}
+# read in the matrix generated using htseq-count 
+cts_all <- as.matrix(read.table("../../RobitailleS/rnaseq_230925/htseq_counts/all_counts.txt", 
+                            sep = "\t", 
+                            header = TRUE, 
+                            row.names=1, 
+                            stringsAsFactors = F))
+# filter out last 5 rows 
+cts_all <- cts_all[1:(nrow(cts_all)-5),]
+colnames(cts_all)
+
+
+# read in the  metadata that has sample/experimental labels 
+meta_all <- read.csv("../../RobitailleS/rnaseq_230925/results/tetR_metadata_231017.csv")
+# order by bacteroides_type 
+meta_all <- meta_all[order(meta_all$Sample_Name),]
+# Potential factors to test against
+meta_all$Condition
+meta_all$Treatment
+```
+
+#### Testing samples treated with Tetracycline
+
+```{r}
+pos <- grep("pos$", colnames(cts_all))
+cts_pos <- cts_all[, pos]
+colrm <- which(colnames(cts_pos) == "tetR4_pos")
+cts_pos <- cts_pos[, -colrm]
+
+meta_pos <- meta_all %>%
+  filter(Treatment == "pos") %>%
+  filter(Sample_Name != "tetR4_pos")
+
+dds_pos <- make_deseq_obj(cts_pos, meta_pos, variable = "Condition", levels = c("control", "mutant"))
+dds_pos <- est_size_factors(dds_pos)
+pca_pos <- pca_plot(dds_pos, meta_pos, feature_num = 500, variable = "Condition")
+
+pdf("../../RobitailleS/rnaseq_230925/results/tet_pos/PCA_tet_pos_231026.pdf", width = 6, height = 4)
+pca_plot(dds_pos, meta_pos, feature_num = 500, variable = "Condition")
+dev.off()
+
+diff_exp <- run_diff_expression(dds_pos, variable = "Condition", control = "control", treatment = "mutant")
+
+# subset @ 5% adjusted pval sig. level 
+res_order_FDR_05 <- diff_exp[diff_exp$padj<0.05,]
+nrow(diff_exp)
+nrow(res_order_FDR_05)
+
+# write both to csv files
+write.csv(as.data.frame(diff_exp), file= "../../RobitailleS/rnaseq_230925/results/tet_pos/DE_results_tet_pos_231026.csv")
+write.csv(as.data.frame(res_order_FDR_05), file="../../RobitailleS/rnaseq_230925/results/tet_pos/DE_results_tet_pos.FDR.0.05_231026.csv")
+
+volcano <- make_volcano(diff_exp, alpha = 0.05, fc_cutoff = 1, xlim = 8, ylim = 40)
+ggsave("../../RobitailleS/rnaseq_230925/results/tet_pos/volcano_tet_pos_231026.pdf", volcano, height = 6, width = 8)
+
+heatmap <- make_clustering_heatmap(dds_pos, meta_pos, diff_exp, variable = "Condition", control = "control", treatment = "mutant")
+
+pdf("../../RobitailleS/rnaseq_230925/results/tet_pos/heatmap_tet_pos_231026.pdf", width = 6, height = 8)
+make_clustering_heatmap(dds_pos, meta_pos, diff_exp, variable = "Condition", control = "control", treatment = "mutant")
+dev.off()
+```
+
+#### Testing samples treated with **NO** Tetracycline
+
+```{r}
+min <- grep("min$", colnames(cts_all))
+cts_min <- cts_all[, min]
+
+meta_min <- meta_all %>%
+  filter(Treatment == "min")
+
+dds_min <- make_deseq_obj(cts_min, meta_min, variable = "Condition", levels = c("control", "mutant"))
+dds_min <- est_size_factors(dds_min)
+pca_min <- pca_plot(dds_min, meta_min, feature_num = 500, variable = "Condition")
+
+pdf("../../RobitailleS/rnaseq_230925/results/tet_min/PCA_tet_min_231026.pdf", width = 6, height = 4)
+pca_plot(dds_min, meta_min, feature_num = 500, variable = "Condition")
+dev.off()
+
+diff_exp <- run_diff_expression(dds_min, variable = "Condition", control = "control", treatment = "mutant")
+
+# subset @ 5% adjusted pval sig. level 
+res_order_FDR_05 <- diff_exp[diff_exp$padj<0.05,]
+nrow(diff_exp)
+nrow(res_order_FDR_05)
+
+# write both to csv files
+write.csv(as.data.frame(diff_exp), file= "../../RobitailleS/rnaseq_230925/results/tet_min/DE_results_tet_min_231026.csv")
+write.csv(as.data.frame(res_order_FDR_05), file="../../RobitailleS/rnaseq_230925/results/tet_min/DE_results_tet_min.FDR.0.05_231026.csv")
+
+volcano <- make_volcano(diff_exp, alpha = 0.05, fc_cutoff = 1, xlim = 5, ylim = 6)
+ggsave("../../RobitailleS/rnaseq_230925/results/tet_min/volcano_tet_min_231026.pdf", volcano, height = 6, width = 8)
+
+heatmap <- make_clustering_heatmap(dds_min, meta_min, diff_exp, variable = "Condition", control = "control", treatment = "mutant")
+
+pdf("../../RobitailleS/rnaseq_230925/results/tet_min/heatmap_tet_min_231026.pdf", width = 6, height = 8)
+make_clustering_heatmap(dds_min, meta_min, diff_exp, variable = "Condition", control = "control", treatment = "mutant")
+dev.off()
+```
+
+
+#### Testing Tet mutant samples
+
+```{r}
+tet <- grep("^tet", colnames(cts_all))
+cts_tet <- cts_all[, tet]
+
+meta_tet <- meta_all %>%
+  filter(Condition == "mutant")
+
+dds_tet <- make_deseq_obj(cts_tet, meta_tet, variable = "Treatment", levels = c("min", "pos"))
+dds_tet <- est_size_factors(dds_tet)
+pca_tet <- pca_plot(dds_tet, meta_tet, feature_num = 500, variable = "Treatment")
+
+pdf("../../RobitailleS/rnaseq_230925/results/tet_mutant/PCA_tet_mutant_231026.pdf", width = 6, height = 4)
+pca_plot(dds_tet, meta_tet, feature_num = 500, variable = "Treatment")
+dev.off()
+
+diff_exp <- run_diff_expression(dds_tet, variable = "Treatment", control = "min", treatment = "pos")
+
+# subset @ 5% adjusted pval sig. level 
+res_order_FDR_05 <- diff_exp[diff_exp$padj<0.05,]
+nrow(diff_exp)
+nrow(res_order_FDR_05)
+
+# write both to csv files
+write.csv(as.data.frame(diff_exp), file= "../../RobitailleS/rnaseq_230925/results/tet_mutant/DE_results_tet_mutant_231026.csv")
+write.csv(as.data.frame(res_order_FDR_05), file="../../RobitailleS/rnaseq_230925/results/tet_mutant/DE_results_tet_mutant.FDR.0.05_231026.csv")
+
+volcano <- make_volcano(diff_exp, alpha = 0.05, fc_cutoff = 1, xlim = 8, ylim = 75)
+ggsave("../../RobitailleS/rnaseq_230925/results/tet_mutant/volcano_tet_mutant_231026.pdf", volcano, height = 10, width = 8)
+
+heatmap <- make_clustering_heatmap(dds_tet, meta_tet, diff_exp, variable = "Treatment", control = "min", treatment = "pos")
+
+pdf("../../RobitailleS/rnaseq_230925/results/tet_mutant/heatmap_tet_mutant_231026.pdf", width = 6, height = 8)
+make_clustering_heatmap(dds_tet, meta_tet, diff_exp, variable = "Treatment", control = "min", treatment = "pos")
+dev.off()
+```
+
+#### Testing WT samples
+
+```{r}
+WT <- grep("^WT", colnames(cts_all))
+cts_WT <- cts_all[, WT]
+
+meta_WT <- meta_all %>%
+  filter(Condition == "control")
+
+dds_WT <- make_deseq_obj(cts_WT, meta_WT, variable = "Treatment", levels = c("min", "pos"))
+dds_WT <- est_size_factors(dds_WT)
+pca_WT <- pca_plot(dds_WT, meta_WT, feature_num = 500, variable = "Treatment")
+
+pdf("../../RobitailleS/rnaseq_230925/results/WT/PCA_WT_231026.pdf", width = 6, height = 4)
+pca_plot(dds_WT, meta_WT, feature_num = 500, variable = "Treatment")
+dev.off()
+
+diff_exp <- run_diff_expression(dds_WT, variable = "Treatment", control = "min", treatment = "pos")
+
+# subset @ 5% adjusted pval sig. level 
+res_order_FDR_05 <- diff_exp[diff_exp$padj<0.05,]
+nrow(diff_exp)
+nrow(res_order_FDR_05)
+
+# write both to csv files
+write.csv(as.data.frame(diff_exp), file= "../../RobitailleS/rnaseq_230925/results/WT/DE_results_WT_231026.csv")
+write.csv(as.data.frame(res_order_FDR_05), file="../../RobitailleS/rnaseq_230925/results/WT/DE_results_WT.FDR.0.05_231026.csv")
+
+volcano <- make_volcano(diff_exp, alpha = 0.05, fc_cutoff = 1, xlim = 10, ylim = 200)
+ggsave("../../RobitailleS/rnaseq_230925/results/WT/volcano_WT_231026.pdf", volcano, height = 6, width = 8)
+
+heatmap <- make_clustering_heatmap(dds_WT, meta_WT, diff_exp, variable = "Treatment", control = "min", treatment = "pos")
+
+pdf("../../RobitailleS/rnaseq_230925/results/WT/heatmap_WT_231026.pdf", width = 6, height = 8)
+make_clustering_heatmap(dds_WT, meta_WT, diff_exp, variable = "Treatment", control = "min", treatment = "pos")
+dev.off()
+```

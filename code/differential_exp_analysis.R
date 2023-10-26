@@ -1,10 +1,11 @@
 make_deseq_obj <- function(count_df, metadata, variable = "Condition", levels = c("control", "mutant")){
   library(tidyverse)
   library(DESeq2)
-  metadata$variable <- factor(metadata$variable, levels=levels)
+  metadata[[variable]] <- factor(metadata[[variable]], levels=levels)
+  design_formula <- as.formula(paste0("~", variable))
   dds <- DESeqDataSetFromMatrix(countData = count_df,
                                 colData = metadata,
-                                design = ~ variable)
+                                design = design_formula)
   keep <- rowSums(counts(dds)) >= 10
   dds <- dds[keep,]
   return(dds)
@@ -33,31 +34,43 @@ gene_check_plot <- function(dds_df, variable = "Condition", BF9343 = "gene-BF934
 pca_plot <- function(dds_df, metadata, feature_num = 500, variable = "Condition"){
   library(DESeq2)
   library(tidyverse)
+  library(ggplot2)
   rld <- rlog(dds_df, blind = FALSE)
-  var <- rev(rowVars(assay(rld))[order(rowVars(assay(rld)))])
-
   rv <- rowVars(assay(rld))
   select <- order(rv, decreasing = TRUE)[seq_len(min(feature_num, length(rv)))]
   pca <- prcomp(t(assay(rld)[select, ]))
+
+  var <- (pca$sdev^2) / sum(pca$sdev^2)
   
   pca_df <- as.data.frame(pca$x)
-  pca_df$variable <- dds@metadata$variable
-  pca_df$sample_ids <- colnames(dds)
+  pca_df[variable] <- metadata[variable]
+  pca_df$sample_ids <- colnames(dds_df)
   
-  pca_df$col <- NA
-  for(i in 1:length(levels(pca_df$variable))){
-    ind1 <- which(pca_df$variable == levels(pca_df$variable)[i])
-    pca_df$col[ind1] <- i
-  }
+  unique_levels <- unique(pca_df[, variable])
+  color_palette <- rainbow(length(unique_levels))
+  level_to_color <- setNames(color_palette, unique_levels)
+  pca_df$col <- level_to_color[pca_df[, variable]]
+  # pca_df$col <- NA
+  # for(i in 1:length(levels(pca_df[,variable]))){
+  #   ind1 <- which(pca_df[,variable] == levels(pca_df[,variable])[i])
+  #   pca_df$col[ind1] <- i
+  # }
+  col_var <- variable
   
-  PCA_plot <- plot(pca_df[, 1], pca_df[, 2], 
-       xlab = paste0("PC1 (", (round(percentVar[1], digits=3)*100), "% variance)"), 
-       ylab = paste0("PC2 (", (round(percentVar[2], digits=3)*100), "% variance)"),
-       main=paste0("PC1 vs PC2 for ", var_feature_n, " most variable genes"),
-       pch=16, cex=1.35, cex.lab=1.3, cex.axis = 1.15, las=1, 
-       panel.first = grid(),
-       col=pca_df$col)
-  text((pca_df[, 2])~(pca_df[, 1]), labels = pca_df$sample_ids, cex=0.5, font=2, pos=4)
+  # Create a new environment to store col_var
+  env <- new.env()
+  assign("col_var", col_var, envir = env)
+  
+  # Create a PCA plot using base R plotting functions
+  PCA_plot <- plot(pca_df$PC1, pca_df$PC2, 
+       col = pca_df$col,
+       xlab = paste0("PC1 (", (round(var[1], digits = 3) * 100), "% variance)"), 
+       ylab = paste0("PC2 (", (round(var[2], digits = 3) * 100), "% variance)"),
+       main = paste0("PC1 vs PC2 for ", feature_num, " most variable genes"))
+  
+  # Add labels for sample_ids
+  text(pca_df$PC1, pca_df$PC2, labels = pca_df$sample_ids, cex = 0.5, font = 2, pos = 4)
+  
   return(PCA_plot)
 }
 
@@ -73,7 +86,7 @@ run_diff_expression <- function(dds_df, variable = "Condition", control = "contr
   return(res_ord)
 }
 
-make_volcano <- function(res_df, alpha = 0.05, fc_cutoff = 1){
+make_volcano <- function(res_df, alpha = 0.05, fc_cutoff = 1, xlim = 5, ylim = 10){
   library(tidyverse)
   library(ggplot2)
   library(ggrepel)
@@ -110,8 +123,8 @@ make_volcano <- function(res_df, alpha = 0.05, fc_cutoff = 1){
   p = ggplot(res_tmp, aes(log2FoldChange, -log10(pvalue))) + 
     geom_point(aes(col=col), alpha = 0.5, size =2, colour = res_tmp$cols, fill = res_tmp$cols)  + 
     xlab("Log2 fold change") + ylab("-log10 P-value") +
-    ylim(0, 12) + 
-    xlim(-5, 5) +
+    ylim(0, ylim) + 
+    xlim(-xlim, xlim) +
     geom_hline(yintercept = -log10(alpha), color = "black", linetype = "dashed", size = 0.4) + 
     theme(legend.key = element_blank()) + 
     theme_classic()
@@ -139,41 +152,41 @@ make_volcano <- function(res_df, alpha = 0.05, fc_cutoff = 1){
 }
 
 make_clustering_heatmap <- function(dds_df, metadata_df, res_ord_df, variable = "Condition", control = "control", treatment = "mutant"){
+  library(dplyr)
   library(tidyverse)
   library(DESeq2)
   library(RColorBrewer)
+  library(circlize)
   library(ComplexHeatmap)
   
-  FDR_05 <- res_ord_df[res_ord_df$padj<0.05,]
-  
+  FDR_05 <- res_ord_df[res_ord_df$padj<=0.05,]
+
   rld <- rlog(dds_df, blind = FALSE)
-  ind_to_keep <- c(which(metadata_df(rld)$variable==control), which(metadata_df(rld)$variable==treatment))
-  
+  ind_to_keep <- c(which(metadata_df[[variable]] == control), 
+                   which(metadata_df[[variable]] == treatment))
+
   mat1 <- assay(rld)[rownames(FDR_05), ind_to_keep]
+
   mat_scaled = t(apply(mat1, 1, scale))
-  
-  col = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
-  cols1 <- brewer.pal(11, "Paired")
-  cols2 <- brewer.pal(9, "Greens")
-  
-  meta_sub <- metadata_df(dds_df)[ind_to_keep, ]
-  
-  ha1 = HeatmapAnnotation(Group = meta_sub$variable, 
-                          col = list(Group = c(control = cols1[1],
-                                               treatment = cols1[2])), 
+
+  col = colorRamp2(c(-3, 0, 3), c("#1F68B8", "white", "#FF7F20"))
+
+  meta_sub <- metadata_df[ind_to_keep, ]
+
+  ha1 = HeatmapAnnotation(Group = meta_sub[[variable]],
+                          col = list(Group = setNames(c("purple2", "goldenrod2"), c(control, treatment))),
                           show_legend = TRUE)
-  
-  ha = columnAnnotation(x = anno_text(meta_sub$variable, 
-                                      which="column", rot = 45, 
+
+  ha = columnAnnotation(x = anno_text(meta_sub$Sample_Name,
+                                      which="column", rot = 45,
                                       gp = gpar(fontsize = 10)))
-  
-  ht1 = Heatmap(mat_scaled, name = "Expression", col = col, 
-                top_annotation = c(ha1), 
+
+  ht1 = Heatmap(mat_scaled, name = "Expression", col = col,
+                top_annotation = c(ha1),
                 bottom_annotation = c(ha),
                 show_row_names = FALSE)
-  
-  return(draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<0.05)"))
-}
 
+  return(draw(ht1, row_title = "Genes", column_title = "Hierachical clustering of DEGs (padj<=0.05)"))
+}
 
 
